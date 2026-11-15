@@ -842,6 +842,12 @@ public struct SubmitResponse: Sendable, Equatable {
 
     public var accepted: Bool { submissionId != nil }
 
+    public init(emailId: String? = nil, emailError: String? = nil, submissionId: String? = nil,
+                submissionError: String? = nil, movedToSent: Bool? = nil) {
+        self.emailId = emailId; self.emailError = emailError; self.submissionId = submissionId
+        self.submissionError = submissionError; self.movedToSent = movedToSent
+    }
+
     static func parse(_ r: [InvocationResponse], existingEmailId: String?) -> SubmitResponse {
         var out = SubmitResponse(emailId: existingEmailId)
         func setError(_ res: InvocationResponse, _ key: String, _ cid: String) -> String? {
@@ -896,6 +902,10 @@ public struct FollowUpResult: Sendable, Equatable {
     public let keywordSet: Bool?
 
     public var allOK: Bool { draftRemoved != false && keywordSet != false }
+
+    public init(draftRemoved: Bool?, keywordSet: Bool?) {
+        self.draftRemoved = draftRemoved; self.keywordSet = keywordSet
+    }
 }
 
 /// Reads names and addresses out of JSContact cards (RFC 9553).

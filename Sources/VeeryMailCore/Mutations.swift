@@ -121,6 +121,17 @@ public struct SnoozeRecord: Codable, Identifiable, Equatable, Sendable {
         /// Mailboxes the message was taken out of (restored on wake-up).
         public let originalMailboxIds: [String]
         public var state: EntryState
+
+        public init(emailId: String, originalMailboxIds: [String], state: EntryState) {
+            self.emailId = emailId; self.originalMailboxIds = originalMailboxIds; self.state = state
+        }
+    }
+
+    public init(id: UUID, accountKey: String, laterMailboxId: String, until: Date, phase: Phase, entries: [Entry],
+                failedWakeAttempts: Int = 0, lastError: String? = nil, nextAttempt: Date? = nil) {
+        self.id = id; self.accountKey = accountKey; self.laterMailboxId = laterMailboxId; self.until = until
+        self.phase = phase; self.entries = entries; self.failedWakeAttempts = failedWakeAttempts
+        self.lastError = lastError; self.nextAttempt = nextAttempt
     }
 
     public let id: UUID

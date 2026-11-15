@@ -33,7 +33,7 @@ public enum RecipientParser {
         return tokens.compactMap(\.address)
     }
 
-    static func split(_ text: String) -> [String] {
+    public static func split(_ text: String) -> [String] {
         var parts: [String] = []
         var current = ""
         var inQuotes = false, inAngle = false, escaped = false
