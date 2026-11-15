@@ -6,6 +6,7 @@ public enum JMAPCapability {
     public static let core = "urn:ietf:params:jmap:core"
     public static let mail = "urn:ietf:params:jmap:mail"
     public static let submission = "urn:ietf:params:jmap:submission"
+    public static let contacts = "urn:ietf:params:jmap:contacts"
     /// Fastmail's vendor extension for Masked Email.
     public static let maskedEmail = "https://www.fastmail.com/dev/maskedemail"
 }
@@ -110,21 +111,10 @@ public struct EmailAddress: Codable, Hashable, Sendable {
         return email
     }
 
-    /// Parses "Name <a@b.c>, d@e.f" style input from a compose field.
+    /// Valid addresses in a compose field. Invalid entries are skipped here; use
+    /// `RecipientParser.parse` to report them.
     public static func parseList(_ text: String) -> [EmailAddress] {
-        text.split(whereSeparator: { $0 == "," || $0 == ";" || $0 == "\n" })
-            .compactMap { raw in
-                let part = raw.trimmingCharacters(in: .whitespaces)
-                guard !part.isEmpty else { return nil }
-                if let lt = part.lastIndex(of: "<"), let gt = part.lastIndex(of: ">"), lt < gt {
-                    let email = part[part.index(after: lt)..<gt].trimmingCharacters(in: .whitespaces)
-                    var name = part[..<lt].trimmingCharacters(in: .whitespaces)
-                    name = name.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-                    guard email.contains("@") else { return nil }
-                    return EmailAddress(name: name.isEmpty ? nil : name, email: email)
-                }
-                return part.contains("@") ? EmailAddress(email: part) : nil
-            }
+        RecipientParser.parse(text).compactMap(\.address)
     }
 }
 
@@ -204,6 +194,10 @@ public struct EmailDetail: Codable, Identifiable, Hashable, Sendable {
     public var bodyValues: [String: EmailBodyValue]?
     public var listUnsubscribe: [String]?
     public var listUnsubscribePost: String?
+    /// Every Authentication-Results header, top (most recently added) first.
+    public var authenticationResults: [String]?
+    /// Every DKIM-Signature header, raw.
+    public var dkimSignatures: [String]?
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case id, threadId, mailboxIds, keywords, from, to, cc, bcc, replyTo, subject,
@@ -211,6 +205,8 @@ public struct EmailDetail: Codable, Identifiable, Hashable, Sendable {
              htmlBody, textBody, attachments, bodyValues
         case listUnsubscribe = "header:List-Unsubscribe:asURLs"
         case listUnsubscribePost = "header:List-Unsubscribe-Post:asText"
+        case authenticationResults = "header:Authentication-Results:asText:all"
+        case dkimSignatures = "header:DKIM-Signature:asRaw:all"
     }
 
     public static let properties = CodingKeys.allCases.map(\.rawValue)

@@ -21,6 +21,92 @@ public enum JMAPError: LocalizedError {
     }
 }
 
+extension Error {
+    /// True only when the request certainly never reached the server (no connection was made),
+    /// so retrying cannot duplicate an action. Timeouts and dropped connections are *not* in
+    /// this set: the server may have processed the request.
+    public var requestCertainlyNotSent: Bool {
+        guard let url = self as? URLError else { return false }
+        switch url.code {
+        case .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed,
+             .internationalRoamingOff, .dataNotAllowed, .secureConnectionFailed,
+             .serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateNotYetValid,
+             .serverCertificateHasUnknownRoot, .clientCertificateRejected, .appTransportSecurityRequiresSecureConnection:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// True when the server answered with a definite rejection (HTTP 4xx other than 408/429).
+    public var isDefiniteRejection: Bool {
+        if case JMAPError.http(let code, _) = self { return (400..<500).contains(code) && code != 408 && code != 429 }
+        return false
+    }
+}
+
+// MARK: - Transport and credentials (injectable for tests)
+
+public protocol HTTPTransport: Sendable {
+    func data(for request: URLRequest) async throws -> (Data, URLResponse)
+    func upload(for request: URLRequest, from body: Data) async throws -> (Data, URLResponse)
+    func bytes(for request: URLRequest) async throws -> (URLSession.AsyncBytes, URLResponse)
+}
+
+public struct URLSessionTransport: HTTPTransport {
+    public let session: URLSession
+    public init(session: URLSession) { self.session = session }
+
+    public static func standard() -> URLSessionTransport {
+        let config = URLSessionConfiguration.default
+        config.httpMaximumConnectionsPerHost = 4
+        config.timeoutIntervalForRequest = 60
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        return URLSessionTransport(session: URLSession(configuration: config))
+    }
+
+    public func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        try await session.data(for: request)
+    }
+    public func upload(for request: URLRequest, from body: Data) async throws -> (Data, URLResponse) {
+        try await session.upload(for: request, from: body)
+    }
+    public func bytes(for request: URLRequest) async throws -> (URLSession.AsyncBytes, URLResponse) {
+        try await session.bytes(for: request)
+    }
+}
+
+/// Supplies the bearer token for Fastmail requests: a personal API token, or OAuth tokens that refresh.
+public protocol CredentialProvider: Sendable {
+    func accessToken() async throws -> String
+    /// Called once after a 401. Return true if a new token is now available and the request should be retried.
+    func refreshAfterUnauthorized() async -> Bool
+}
+
+/// A developer API token. It never refreshes.
+public struct StaticTokenCredentials: CredentialProvider {
+    let token: String
+    public init(token: String) { self.token = token }
+    public func accessToken() async throws -> String { token }
+    public func refreshAfterUnauthorized() async -> Bool { false }
+}
+
+/// Per-item outcome of a bulk Email/set update or destroy.
+public struct SetOutcome: Sendable, Equatable {
+    public var succeeded: Set<String> = []
+    /// id → JMAP SetError type (e.g. "notFound", "forbidden").
+    public var failed: [String: String] = [:]
+
+    public init(succeeded: Set<String> = [], failed: [String: String] = [:]) {
+        self.succeeded = succeeded; self.failed = failed
+    }
+
+    public var allSucceeded: Bool { failed.isEmpty }
+}
+
 /// One JMAP method invocation: [name, arguments, callId].
 public struct Invocation {
     public let name: String
@@ -90,39 +176,42 @@ public struct EmailChanges {
 public final class JMAPClient: @unchecked Sendable {
     public static let fastmailSessionURL = URL(string: "https://api.fastmail.com/jmap/session")!
 
-    private let token: String
-    private let http: URLSession
+    private let credentials: CredentialProvider
+    private let transport: HTTPTransport
     private let sessionURL: URL
     private let lock = NSLock()
     private var _session: JMAPSession?
 
     public var session: JMAPSession? {
-        lock.lock(); defer { lock.unlock() }
-        return _session
+        lock.withLock { _session }
     }
 
-    public init(token: String, sessionURL: URL = JMAPClient.fastmailSessionURL) {
-        self.token = token
+    public init(credentials: CredentialProvider,
+                transport: HTTPTransport = URLSessionTransport.standard(),
+                sessionURL: URL = JMAPClient.fastmailSessionURL) {
+        self.credentials = credentials
+        self.transport = transport
         self.sessionURL = sessionURL
-        let config = URLSessionConfiguration.default
-        config.httpMaximumConnectionsPerHost = 4
-        config.timeoutIntervalForRequest = 60
-        config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        config.urlCache = nil
-        self.http = URLSession(configuration: config)
+    }
+
+    public convenience init(token: String, sessionURL: URL = JMAPClient.fastmailSessionURL) {
+        self.init(credentials: StaticTokenCredentials(token: token), sessionURL: sessionURL)
     }
 
     // MARK: Session
 
     @discardableResult
     public func connect() async throws -> JMAPSession {
-        var req = URLRequest(url: sessionURL)
-        authorize(&req)
-        let (data, response) = try await http.data(for: req)
-        try check(response, data)
+        let data = try await perform(URLRequest(url: sessionURL))
         let s = try JMAPDate.shared.decode(JMAPSession.self, from: data)
-        lock.lock(); _session = s; lock.unlock()
+        lock.withLock { _session = s }
         return s
+    }
+
+    /// A stable identity for the signed-in account, used to namespace local storage.
+    public var accountKey: String? {
+        guard let s = session, let id = s.mailAccountId else { return nil }
+        return "\(s.username.lowercased())|\(id)"
     }
 
     private func requireSession() throws -> (JMAPSession, String) {
@@ -134,8 +223,11 @@ public final class JMAPClient: @unchecked Sendable {
 
     // MARK: Raw requests
 
+    /// Sends one JMAP request. With `throwOnMethodError` false, method-level errors come back as
+    /// responses named "error" so callers can tell which part of a batch failed.
     public func call(_ calls: [Invocation],
-                     using extra: [String] = []) async throws -> [InvocationResponse] {
+                     using extra: [String] = [],
+                     throwOnMethodError: Bool = true) async throws -> [InvocationResponse] {
         let (s, _) = try requireSession()
         let using = [JMAPCapability.core, JMAPCapability.mail] + extra
         let body: [String: Any] = [
@@ -145,10 +237,8 @@ public final class JMAPClient: @unchecked Sendable {
         var req = URLRequest(url: s.apiUrl)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        authorize(&req)
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await http.data(for: req)
-        try check(response, data)
+        let data = try await perform(req)
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let responses = json["methodResponses"] as? [[Any]] else {
@@ -159,7 +249,7 @@ public final class JMAPClient: @unchecked Sendable {
                   let args = triple[1] as? [String: Any], let id = triple[2] as? String else {
                 throw JMAPError.decoding("malformed invocation")
             }
-            if name == "error" {
+            if name == "error" && throwOnMethodError {
                 throw JMAPError.method(args["type"] as? String ?? "unknown", args["description"] as? String)
             }
             return InvocationResponse(name: name, args: args, id: id)
@@ -370,22 +460,39 @@ public final class JMAPClient: @unchecked Sendable {
     // MARK: Mutations
 
     /// Apply JMAP patch objects, e.g. ["keywords/$seen": true] or ["mailboxIds/abc": NSNull()].
-    public func updateEmails(_ patches: [String: [String: Any]]) async throws {
-        guard !patches.isEmpty else { return }
+    /// Returns which messages changed and which didn't; throws only if the request itself failed.
+    @discardableResult
+    public func updateEmails(_ patches: [String: [String: Any]]) async throws -> SetOutcome {
+        guard !patches.isEmpty else { return SetOutcome() }
         let (_, account) = try requireSession()
         let r = try await call([
             Invocation("Email/set", ["accountId": account, "update": patches], id: "u"),
         ])
-        try response(r, "u", "Email/set").checkSet()
+        return Self.outcome(try response(r, "u", "Email/set"), updated: true)
     }
 
-    public func destroyEmails(_ ids: [String]) async throws {
-        guard !ids.isEmpty else { return }
+    @discardableResult
+    public func destroyEmails(_ ids: [String]) async throws -> SetOutcome {
+        guard !ids.isEmpty else { return SetOutcome() }
         let (_, account) = try requireSession()
         let r = try await call([
             Invocation("Email/set", ["accountId": account, "destroy": ids], id: "d"),
         ])
-        try response(r, "d", "Email/set").checkSet()
+        return Self.outcome(try response(r, "d", "Email/set"), updated: false)
+    }
+
+    static func outcome(_ res: InvocationResponse, updated: Bool) -> SetOutcome {
+        var o = SetOutcome()
+        if updated {
+            if let ok = res.args["updated"] as? [String: Any] { o.succeeded = Set(ok.keys) }
+        } else if let ok = res.args["destroyed"] as? [String] {
+            o.succeeded = Set(ok)
+        }
+        let failures = res.args[updated ? "notUpdated" : "notDestroyed"] as? [String: Any] ?? [:]
+        for (id, err) in failures {
+            o.failed[id] = (err as? [String: Any])?["type"] as? String ?? "error"
+        }
+        return o
     }
 
     /// Ids of every message in the given threads (so actions apply to whole conversations).
@@ -409,7 +516,7 @@ public final class JMAPClient: @unchecked Sendable {
         return try response(r, "i", "Identity/get").decode([Identity].self, "list")
     }
 
-    private func emailObject(_ m: OutgoingMessage, draftsId: String) -> [String: Any] {
+    func emailObject(_ m: OutgoingMessage, draftsId: String) -> [String: Any] {
         var email: [String: Any] = [
             "mailboxIds": [draftsId: true],
             "keywords": ["$draft": true, "$seen": true],
@@ -417,8 +524,15 @@ public final class JMAPClient: @unchecked Sendable {
             "to": m.to.map(\.jsonObject),
             "subject": m.subject,
             "textBody": [["partId": "text", "type": "text/plain"]],
-            "bodyValues": ["text": ["value": m.body]],
         ]
+        var values: [String: Any] = ["text": ["value": m.body]]
+        if let html = m.htmlBody, !html.isEmpty {
+            // With both a text and an HTML body the server builds multipart/alternative.
+            email["htmlBody"] = [["partId": "html", "type": "text/html"]]
+            values["html"] = ["value": html]
+        }
+        email["bodyValues"] = values
+        if let id = m.messageId { email["messageId"] = [id] }
         if !m.cc.isEmpty { email["cc"] = m.cc.map(\.jsonObject) }
         if !m.bcc.isEmpty { email["bcc"] = m.bcc.map(\.jsonObject) }
         if let irt = m.inReplyTo { email["inReplyTo"] = [irt] }
@@ -431,15 +545,14 @@ public final class JMAPClient: @unchecked Sendable {
         return email
     }
 
-    /// Saves (or replaces) a draft. Returns the new draft id.
-    public func saveDraft(_ m: OutgoingMessage, draftsId: String, replacing oldId: String?) async throws -> String {
+    /// Creates a draft and returns its id. It never touches an older draft: the caller removes
+    /// that only after this succeeds, so a failed save can't lose the user's work.
+    public func createDraft(_ m: OutgoingMessage, draftsId: String) async throws -> String {
         let (_, account) = try requireSession()
-        var args: [String: Any] = ["accountId": account,
-                                   "create": ["d": emailObject(m, draftsId: draftsId)]]
-        if let oldId { args["destroy"] = [oldId] }
-        let r = try await call([Invocation("Email/set", args, id: "s")])
+        let r = try await call([Invocation("Email/set", ["accountId": account,
+                                                        "create": ["d": emailObject(m, draftsId: draftsId)]], id: "s")])
         let res = try response(r, "s", "Email/set")
-        try res.checkSet(ignoring: ["notDestroyed"])
+        try res.checkSet()
         guard let created = res.args["created"] as? [String: Any],
               let d = created["d"] as? [String: Any], let id = d["id"] as? String else {
             throw JMAPError.decoding("draft not created")
@@ -447,50 +560,95 @@ public final class JMAPClient: @unchecked Sendable {
         return id
     }
 
-    /// Creates the message and submits it in one request. On success Fastmail moves it
-    /// from Drafts to Sent. `sendAt` uses SMTP FUTURERELEASE (HOLDUNTIL) for scheduled send.
-    public func send(_ m: OutgoingMessage, identityId: String,
-                     draftsId: String, sentId: String,
-                     replacingDraft oldDraftId: String? = nil,
-                     sendAt: Date? = nil) async throws {
-        let (s, account) = try requireSession()
-        var setArgs: [String: Any] = ["accountId": account,
-                                      "create": ["msg": emailObject(m, draftsId: draftsId)]]
-        if let oldDraftId { setArgs["destroy"] = [oldDraftId] }
-
-        var submission: [String: Any] = ["identityId": identityId, "emailId": "#msg"]
+    func submissionObject(_ m: OutgoingMessage, identityId: String, emailRef: String, sendAt: Date?) throws -> [String: Any] {
+        var submission: [String: Any] = ["identityId": identityId, "emailId": emailRef]
         if let sendAt {
-            guard s.maxDelayedSend > 0 else { throw JMAPError.unsupported("Scheduled send isn't enabled on this account.") }
+            guard (session?.maxDelayedSend ?? 0) > 0 else {
+                throw JMAPError.unsupported("Scheduled send isn't enabled on this account.")
+            }
             let rcpts = (m.to + m.cc + m.bcc).map { ["email": $0.email, "parameters": NSNull()] as [String: Any] }
             let mailFrom: [String: Any] = ["email": m.from.email,
                                            "parameters": ["HOLDUNTIL": JMAPDate.string(sendAt)]]
             submission["envelope"] = ["mailFrom": mailFrom, "rcptTo": rcpts] as [String: Any]
         }
+        return submission
+    }
 
+    /// Creates the message (unless `existingEmailId` is given) and submits it in one request.
+    /// The three results (email created, submission accepted, moved to Sent) are reported
+    /// separately. Nothing else is touched: the old draft and reply keywords are follow-ups.
+    public func createAndSubmit(_ m: OutgoingMessage, identityId: String, draftsId: String, sentId: String,
+                                sendAt: Date?, existingEmailId: String? = nil) async throws -> SubmitResponse {
+        let (_, account) = try requireSession()
         let onSuccess: [String: Any] = [
             "mailboxIds/\(draftsId)": NSNull(),
             "mailboxIds/\(sentId)": true,
             "keywords/$draft": NSNull(),
         ]
-        var answered: [String: [String: Any]] = [:]
-        if let original = m.replyingToEmailId {
-            answered[original] = [m.isForward ? "keywords/$forwarded" : "keywords/$answered": true]
+        var calls: [Invocation] = []
+        if existingEmailId == nil {
+            calls.append(Invocation("Email/set", ["accountId": account,
+                                                  "create": ["msg": emailObject(m, draftsId: draftsId)]], id: "e"))
         }
+        let ref = existingEmailId ?? "#msg"
+        calls.append(Invocation("EmailSubmission/set", [
+            "accountId": account,
+            "create": ["sub": try submissionObject(m, identityId: identityId, emailRef: ref, sendAt: sendAt)],
+            "onSuccessUpdateEmail": ["#sub": onSuccess],
+        ], id: "s"))
+        let r = try await call(calls, using: [JMAPCapability.submission], throwOnMethodError: false)
+        return SubmitResponse.parse(r, existingEmailId: existingEmailId)
+    }
 
-        var calls = [
-            Invocation("Email/set", setArgs, id: "e"),
-            Invocation("EmailSubmission/set", [
-                "accountId": account,
-                "create": ["sub": submission],
-                "onSuccessUpdateEmail": ["#sub": onSuccess],
-            ], id: "s"),
-        ]
-        if !answered.isEmpty {
-            calls.append(Invocation("Email/set", ["accountId": account, "update": answered], id: "a"))
+    /// Looks for a message we created, by the Message-ID we gave it, and any submission of it.
+    public func findSent(messageId: String) async throws -> SendReconciliation {
+        let (_, account) = try requireSession()
+        let r = try await call([
+            Invocation("Email/query", ["accountId": account,
+                                       "filter": ["header": ["Message-ID", messageId]],
+                                       "limit": 5], id: "q"),
+            Invocation("Email/get", ["accountId": account,
+                                     "#ids": Invocation.ref("q", "Email/query", "/ids"),
+                                     "properties": ["id", "mailboxIds", "keywords"]], id: "g"),
+        ])
+        let found = (try response(r, "g", "Email/get").args["list"] as? [[String: Any]]) ?? []
+        let emailIds = found.compactMap { $0["id"] as? String }
+        guard !emailIds.isEmpty else { return SendReconciliation(emailIds: [], submissions: [], inSent: false) }
+        let r2 = try await call([
+            Invocation("EmailSubmission/query", ["accountId": account,
+                                                 "filter": ["emailIds": emailIds], "limit": 10], id: "sq"),
+            Invocation("EmailSubmission/get", ["accountId": account,
+                                               "#ids": Invocation.ref("sq", "EmailSubmission/query", "/ids"),
+                                               "properties": ["id", "emailId", "undoStatus"]], id: "sg"),
+        ], using: [JMAPCapability.submission])
+        let subs = (try response(r2, "sg", "EmailSubmission/get").args["list"] as? [[String: Any]]) ?? []
+        let isDraft = found.contains { (($0["keywords"] as? [String: Bool])?["$draft"]) == true }
+        return SendReconciliation(
+            emailIds: emailIds,
+            submissions: subs.compactMap { s in
+                guard let id = s["id"] as? String else { return nil }
+                return SendReconciliation.Submission(id: id, undoStatus: s["undoStatus"] as? String ?? "unknown")
+            },
+            inSent: !isDraft)
+    }
+
+    /// After a confirmed submission: remove the user's old draft and mark the original
+    /// message answered or forwarded. Each part is reported on its own.
+    public func completeSend(oldDraftId: String?, originalEmailId: String?, keyword: String?) async throws -> FollowUpResult {
+        let (_, account) = try requireSession()
+        var args: [String: Any] = ["accountId": account]
+        if let oldDraftId { args["destroy"] = [oldDraftId] }
+        if let originalEmailId, let keyword { args["update"] = [originalEmailId: ["keywords/\(keyword)": true]] }
+        guard args.count > 1 else { return FollowUpResult(draftRemoved: nil, keywordSet: nil) }
+        let r = try await call([Invocation("Email/set", args, id: "f")])
+        let res = try response(r, "f", "Email/set")
+        let destroyed = Set((res.args["destroyed"] as? [String]) ?? [])
+        let updated = Set(((res.args["updated"] as? [String: Any]) ?? [:]).keys)
+        let draftGone = oldDraftId.map { id in
+            destroyed.contains(id) || ((res.args["notDestroyed"] as? [String: Any])?[id] as? [String: Any])?["type"] as? String == "notFound"
         }
-        let r = try await call(calls, using: [JMAPCapability.submission])
-        try response(r, "e", "Email/set").checkSet(ignoring: ["notDestroyed"])
-        try response(r, "s", "EmailSubmission/set").checkSet()
+        return FollowUpResult(draftRemoved: draftGone,
+                              keywordSet: originalEmailId.map { updated.contains($0) })
     }
 
     // MARK: Blobs
@@ -503,9 +661,7 @@ public final class JMAPClient: @unchecked Sendable {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue(type, forHTTPHeaderField: "Content-Type")
-        authorize(&req)
-        let (body, response) = try await http.upload(for: req, from: data)
-        try check(response, body)
+        let body = try await perform(req, uploading: data)
         return try JSONDecoder().decode(UploadResult.self, from: body)
     }
 
@@ -524,11 +680,7 @@ public final class JMAPClient: @unchecked Sendable {
 
     public func download(blobId: String, name: String, type: String) async throws -> Data {
         guard let url = downloadURL(blobId: blobId, name: name, type: type) else { throw JMAPError.notConnected }
-        var req = URLRequest(url: url)
-        authorize(&req)
-        let (data, response) = try await http.data(for: req)
-        try check(response, data)
-        return data
+        return try await perform(URLRequest(url: url))
     }
 
     // MARK: Fastmail Masked Email
@@ -586,8 +738,11 @@ public final class JMAPClient: @unchecked Sendable {
                         var req = URLRequest(url: url)
                         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                         req.timeoutInterval = 300
-                        self.authorize(&req)
-                        let (bytes, response) = try await self.http.bytes(for: req)
+                        req.setValue("Bearer \(try await self.credentials.accessToken())", forHTTPHeaderField: "Authorization")
+                        let (bytes, response) = try await self.transport.bytes(for: req)
+                        if (response as? HTTPURLResponse)?.statusCode == 401 {
+                            _ = await self.credentials.refreshAfterUnauthorized()
+                        }
                         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw JMAPError.http(0, "eventsource") }
                         backoff = 1
                         // After a dropped connection (sleep, network change) changes may have been
@@ -631,23 +786,40 @@ public final class JMAPClient: @unchecked Sendable {
         return Set(types.keys)
     }
 
-    // MARK: Unsubscribe (never sends Fastmail credentials)
+    // MARK: Contacts (JMAP for Contacts, RFC 9610)
 
-    public static func oneClickUnsubscribe(_ url: URL) async throws {
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        req.httpBody = Data("List-Unsubscribe=One-Click".utf8)
-        let (_, response) = try await URLSession.shared.data(for: req)
-        guard let code = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(code) else {
-            throw JMAPError.http((response as? HTTPURLResponse)?.statusCode ?? 0, "unsubscribe failed")
-        }
+    /// Every name and address in the user's Fastmail address books. Empty when the session
+    /// doesn't offer contacts (for example, a token without the contacts scope).
+    public func contacts() async throws -> [EmailAddress] {
+        guard let s = session, s.capabilities[JMAPCapability.contacts] != nil,
+              let account = s.primaryAccounts[JMAPCapability.contacts] ?? s.mailAccountId else { return [] }
+        let r = try await call([
+            Invocation("ContactCard/get", ["accountId": account, "ids": NSNull(),
+                                           "properties": ["id", "name", "emails"]], id: "c"),
+        ], using: [JMAPCapability.contacts])
+        let list = (try response(r, "c", "ContactCard/get").args["list"] as? [[String: Any]]) ?? []
+        return ContactCards.addresses(from: list)
     }
 
     // MARK: Plumbing
 
-    private func authorize(_ req: inout URLRequest) {
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    /// Adds the bearer token, sends, and retries once after a 401 if the credentials refreshed.
+    private func perform(_ request: URLRequest, uploading body: Data? = nil) async throws -> Data {
+        var attempt = 0
+        while true {
+            var req = request
+            req.setValue("Bearer \(try await credentials.accessToken())", forHTTPHeaderField: "Authorization")
+            let (data, response) = body == nil
+                ? try await transport.data(for: req)
+                : try await transport.upload(for: req, from: body!)
+            if let http = response as? HTTPURLResponse, http.statusCode == 401, attempt == 0,
+               await credentials.refreshAfterUnauthorized() {
+                attempt += 1
+                continue
+            }
+            try check(response, data)
+            return data
+        }
     }
 
     private func check(_ response: URLResponse, _ data: Data) throws {
@@ -658,9 +830,106 @@ public final class JMAPClient: @unchecked Sendable {
     }
 }
 
+// MARK: - Send results
+
+public struct SubmitResponse: Sendable, Equatable {
+    public var emailId: String?
+    public var emailError: String?
+    public var submissionId: String?
+    public var submissionError: String?
+    /// nil when the server didn't report the follow-up move.
+    public var movedToSent: Bool?
+
+    public var accepted: Bool { submissionId != nil }
+
+    static func parse(_ r: [InvocationResponse], existingEmailId: String?) -> SubmitResponse {
+        var out = SubmitResponse(emailId: existingEmailId)
+        func setError(_ res: InvocationResponse, _ key: String, _ cid: String) -> String? {
+            guard let failures = res.args[key] as? [String: Any], let err = failures[cid] as? [String: Any] else { return nil }
+            return [err["type"] as? String, err["description"] as? String].compactMap { $0 }.joined(separator: ": ")
+        }
+        for res in r {
+            switch (res.name, res.id) {
+            case ("Email/set", "e"):
+                out.emailId = ((res.args["created"] as? [String: Any])?["msg"] as? [String: Any])?["id"] as? String
+                out.emailError = setError(res, "notCreated", "msg")
+            case ("EmailSubmission/set", "s"):
+                out.submissionId = ((res.args["created"] as? [String: Any])?["sub"] as? [String: Any])?["id"] as? String
+                out.submissionError = setError(res, "notCreated", "sub")
+            case ("Email/set", "s"):
+                // The implicit update from onSuccessUpdateEmail.
+                let updated = (res.args["updated"] as? [String: Any]) ?? [:]
+                out.movedToSent = out.emailId.map { updated.keys.contains($0) } ?? !updated.isEmpty
+            case ("error", "e"):
+                out.emailError = res.args["type"] as? String ?? "error"
+            case ("error", "s"):
+                out.submissionError = res.args["type"] as? String ?? "error"
+            default:
+                break
+            }
+        }
+        if out.accepted, out.movedToSent == nil { out.movedToSent = false }
+        return out
+    }
+}
+
+public struct SendReconciliation: Sendable, Equatable {
+    public struct Submission: Sendable, Equatable {
+        public let id: String
+        public let undoStatus: String   // "pending" (scheduled or in its undo window), "final", "canceled"
+    }
+    public let emailIds: [String]
+    public let submissions: [Submission]
+    public let inSent: Bool
+
+    public init(emailIds: [String], submissions: [Submission], inSent: Bool) {
+        self.emailIds = emailIds; self.submissions = submissions; self.inSent = inSent
+    }
+
+    /// A live submission exists: the message was sent (or is scheduled to be).
+    public var wasSubmitted: Bool { submissions.contains { $0.undoStatus != "canceled" } || inSent }
+}
+
+public struct FollowUpResult: Sendable, Equatable {
+    /// nil = nothing to do.
+    public let draftRemoved: Bool?
+    public let keywordSet: Bool?
+
+    public var allOK: Bool { draftRemoved != false && keywordSet != false }
+}
+
+/// Reads names and addresses out of JSContact cards (RFC 9553).
+public enum ContactCards {
+    public static func addresses(from cards: [[String: Any]]) -> [EmailAddress] {
+        var out: [EmailAddress] = []
+        var seen = Set<String>()
+        for card in cards {
+            let name = displayName(card["name"] as? [String: Any])
+            let emails = (card["emails"] as? [String: Any]) ?? [:]
+            for value in emails.values {
+                guard let address = (value as? [String: Any])?["address"] as? String,
+                      address.contains("@") else { continue }
+                if seen.insert(address.lowercased()).inserted {
+                    out.append(EmailAddress(name: name, email: address))
+                }
+            }
+        }
+        return out
+    }
+
+    static func displayName(_ name: [String: Any]?) -> String? {
+        guard let name else { return nil }
+        if let full = name["full"] as? String, !full.isEmpty { return full }
+        let parts = (name["components"] as? [[String: Any]] ?? []).filter {
+            ["given", "surname", "given2"].contains($0["kind"] as? String ?? "")
+        }.compactMap { $0["value"] as? String }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+}
+
 // MARK: - Outgoing message
 
-public struct OutgoingAttachment: Hashable, Sendable, Identifiable {
+public struct OutgoingAttachment: Codable, Hashable, Sendable, Identifiable {
     public var id: String { blobId }
     public let blobId: String
     public let name: String
@@ -672,27 +941,39 @@ public struct OutgoingAttachment: Hashable, Sendable, Identifiable {
     }
 }
 
-public struct OutgoingMessage: Sendable {
+public struct OutgoingMessage: Codable, Sendable, Equatable {
     public var from: EmailAddress
     public var to: [EmailAddress]
     public var cc: [EmailAddress]
     public var bcc: [EmailAddress]
     public var subject: String
+    /// Plain-text body (always sent).
     public var body: String
+    /// Formatted body, sent alongside the plain text when present.
+    public var htmlBody: String?
     public var inReplyTo: String?
     public var references: [String]
     public var attachments: [OutgoingAttachment]
     public var replyingToEmailId: String?
     public var isForward: Bool
+    /// A Message-ID (without angle brackets) chosen by the app, so a send can be found again
+    /// on the server if the connection drops.
+    public var messageId: String?
 
     public init(from: EmailAddress, to: [EmailAddress], cc: [EmailAddress] = [], bcc: [EmailAddress] = [],
-                subject: String, body: String, inReplyTo: String? = nil, references: [String] = [],
-                attachments: [OutgoingAttachment] = [], replyingToEmailId: String? = nil, isForward: Bool = false) {
+                subject: String, body: String, htmlBody: String? = nil, inReplyTo: String? = nil,
+                references: [String] = [], attachments: [OutgoingAttachment] = [],
+                replyingToEmailId: String? = nil, isForward: Bool = false, messageId: String? = nil) {
         self.from = from; self.to = to; self.cc = cc; self.bcc = bcc
-        self.subject = subject; self.body = body
+        self.subject = subject; self.body = body; self.htmlBody = htmlBody
         self.inReplyTo = inReplyTo; self.references = references
         self.attachments = attachments
         self.replyingToEmailId = replyingToEmailId; self.isForward = isForward
+        self.messageId = messageId
+    }
+
+    public static func makeMessageId(senderDomain: String) -> String {
+        "veerymail.\(UUID().uuidString.lowercased())@\(senderDomain.isEmpty ? "veerymail.local" : senderDomain)"
     }
 }
 
