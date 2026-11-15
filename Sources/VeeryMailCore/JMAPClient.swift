@@ -40,8 +40,8 @@ extension Error {
 
     /// True when the server answered with a definite rejection (HTTP 4xx other than 408/429).
     public var isDefiniteRejection: Bool {
-        if case JMAPError.http(let code, _) = self { return (400..<500).contains(code) && code != 408 && code != 429 }
-        return false
+        guard let jmap = self as? JMAPError, case .http(let code, _) = jmap else { return false }
+        return (400..<500).contains(code) && code != 408 && code != 429
     }
 }
 
