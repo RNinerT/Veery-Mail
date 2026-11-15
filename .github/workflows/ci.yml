@@ -39,6 +39,9 @@ jobs:
         run: swift build 2>&1 | tee build.log
 
       - name: Test
+        timeout-minutes: 10
+        env:
+          NSUnbufferedIO: "YES"   # print each test as it starts, so a hang shows which test
         run: swift test 2>&1 | tee test.log
 
       - name: Release app bundle (ad-hoc signed)
