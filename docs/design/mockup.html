@@ -21,7 +21,7 @@ body.light{--nav:#E3E8EF;--inbox:#EEF1F6;--card:#fff;--rim:rgba(0,0,0,.10);--sel
 .card .sum{font-size:12px;color:var(--sec);margin-top:2px}
 .graph{display:flex;align-items:flex-end;gap:2px;height:30px;margin-top:10px}.graph i{flex:1;border-radius:1.5px;background:color-mix(in srgb,var(--sec) 55%,transparent)}.graph i.z{background:color-mix(in srgb,var(--sec) 18%,transparent)}.graph i.now{background:var(--accent)}
 .ax{display:flex;justify-content:space-between;font-size:9.5px;font-weight:500;color:var(--sec);margin-top:3px}
-.bell{font-size:12px;margin-top:8px}
+.bell{font-size:12px;margin-top:8px}.st{display:grid;grid-template-columns:14px 1fr;column-gap:6px;font-size:12px;margin-top:6px;white-space:nowrap;overflow:hidden}.st i{grid-column:2}.st span{color:var(--accent);width:14px}.st b{font-weight:400}.st i{font-style:normal;color:var(--sec);overflow:hidden;text-overflow:ellipsis}
 .sr{position:relative}.sr .bar{position:absolute;left:44px;bottom:3px;height:2px;border-radius:2px;background:color-mix(in srgb,var(--accent) 55%,transparent)}
 .foot{border-top:1px solid var(--rim);padding:8px 8px 10px;font-size:12px;color:var(--sec);display:flex;align-items:center;gap:6px}.foot i{width:6px;height:6px;border-radius:50%;background:var(--accent)}
 .list{background:var(--inbox);overflow:hidden;border-right:1px solid var(--rim)}
@@ -64,6 +64,10 @@ body.light{--nav:#E3E8EF;--inbox:#EEF1F6;--card:#fff;--rim:rgba(0,0,0,.10);--sel
    <div class="big"><span class="num">3</span><div><div class="cond">⛅ Light</div><div class="u">unread</div></div></div>
    <div class="sum">2 new in the last hour · 9 today</div>
    <div class="graph" id="graph"></div><div class="ax"><span>4 PM</span><span>3 AM</span><span>Now</span></div>
+   <div style="height:1px;background:var(--rim);margin:10px 0 8px"></div>
+   <div class="st"><span>⌛</span><b>Oldest unread: 2 days</b><i>Northfield Orchestra</i></div>
+   <div class="st"><span>➤</span><b>Waiting on 2 replies</b><i>3+ days</i></div>
+   <div class="st"><span>◷</span><b>Typical reply: 3h 20m</b><i>last week 5h 10m</i></div>
    <div class="bell">🔔 New mail alerts on</div></div>
   <div class="h">FAVORITES</div>
   <div class="sr on"><span class="g">▣</span><b>Inbox</b><em>3</em></div><div class="sr"><span class="g">✉</span><b>Unread</b></div><div class="sr"><span class="g">⚑</span><b>Flagged</b></div><div class="sr"><span class="g">▢</span><b>Drafts</b><em>2</em></div><div class="sr"><span class="g">➤</span><b>Sent</b></div>

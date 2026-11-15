@@ -48,6 +48,7 @@ struct InboxConditions {
 struct ConditionsCard: View {
     @Environment(MailStore.self) private var store
     @AppStorage("notifications") private var notifications = true
+    @AppStorage(CardStat.storageKey) private var statsRaw = ""
 
     var body: some View {
         let unread = store.mailbox(role: "inbox")?.unreadThreads ?? 0
@@ -92,6 +93,17 @@ struct ConditionsCard: View {
                 .accessibilityHint("Shows the Inbox")
 
                 ArrivalsGraph(hourly: c.hourly, now: context.date)
+
+                // Optional stats chosen in Settings → Summary Card. Never more than three.
+                let stats = CardStat.parse(statsRaw)
+                if !stats.isEmpty {
+                    Rectangle().fill(Theme.rim).frame(height: 1)
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(stats.prefix(CardStat.maxShown)) { stat in
+                            CardStatRow(stat: stat, now: context.date)
+                        }
+                    }
+                }
 
                 // Notifications get a visible switch here instead of living only in Settings.
                 Button { notifications.toggle() } label: {

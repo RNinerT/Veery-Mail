@@ -171,6 +171,10 @@ struct MessageSection: View {
             }
         }
         .padding(.top, Theme.Space.l)
+        .onAppear {
+            // Counts toward "Trackers blocked this week" on the sidebar card.
+            if isExpanded && prepared.hasRemote && !allowRemote { PrivacyLedger.record(email.id) }
+        }
         .contextMenu {
             Button("Reply") { store.reply(all: false, to: email) }
             Button("Reply All") { store.reply(all: true, to: email) }

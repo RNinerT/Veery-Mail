@@ -346,6 +346,8 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
             MessageListSettings()
                 .tabItem { Label("Message List", systemImage: "list.bullet.rectangle") }
+            SummaryCardSettings()
+                .tabItem { Label("Summary Card", systemImage: "rectangle.stack") }
         }
     }
 }
@@ -359,7 +361,6 @@ struct GeneralSettings: View {
     @AppStorage("defaultIdentityId") private var defaultIdentityId = ""
     @AppStorage("appearance") private var appearance = "dark"
     @AppStorage("readerDim") private var readerDim = false
-    @AppStorage("sidebar.showConditions") private var showConditions = true
 
     var body: some View {
         Form {
@@ -377,7 +378,6 @@ struct GeneralSettings: View {
                 }
             }
             Section("Appearance") {
-                Toggle("Show the Inbox summary card at the top of the sidebar", isOn: $showConditions)
                 Picker("Theme", selection: $appearance) {
                     Text("Ink (dark)").tag("dark")
                     Text("Light").tag("light")

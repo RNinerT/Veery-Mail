@@ -207,13 +207,14 @@ public final class JMAPClient: @unchecked Sendable {
     public func queryEmails(filter: [String: Any],
                             position: Int = 0,
                             limit: Int = 60,
-                            collapseThreads: Bool = true) async throws -> QueryPage {
+                            collapseThreads: Bool = true,
+                            oldestFirst: Bool = false) async throws -> QueryPage {
         let (_, account) = try requireSession()
         let r = try await call([
             Invocation("Email/query", [
                 "accountId": account,
                 "filter": filter,
-                "sort": [["property": "receivedAt", "isAscending": false] as [String: Any]],
+                "sort": [["property": "receivedAt", "isAscending": oldestFirst] as [String: Any]],
                 "collapseThreads": collapseThreads,
                 "position": position,
                 "limit": limit,
@@ -231,6 +232,67 @@ public final class JMAPClient: @unchecked Sendable {
                          total: q.int("total"),
                          position: q.int("position") ?? position,
                          emailState: g.string("state"))
+    }
+
+    /// Arrival time and filing for many messages, in one round trip (for statistics).
+    public func mailMeta(filter: [String: Any], limit: Int) async throws -> [MailMeta] {
+        let (_, account) = try requireSession()
+        let r = try await call([
+            Invocation("Email/query", [
+                "accountId": account, "filter": filter,
+                "sort": [["property": "receivedAt", "isAscending": false] as [String: Any]],
+                "collapseThreads": false, "limit": limit,
+            ], id: "q"),
+            Invocation("Email/get", [
+                "accountId": account,
+                "#ids": Invocation.ref("q", "Email/query", "/ids"),
+                "properties": MailMeta.properties,
+            ], id: "g"),
+        ])
+        return try response(r, "g", "Email/get").decode([MailMeta].self, "list")
+    }
+
+    /// Your recently sent messages plus every message in their conversations, in one round trip.
+    public func sentWithThreads(sentMailboxId: String, since: Date, limit: Int = 100)
+        async throws -> (sent: [EmailSummary], threadMail: [EmailSummary]) {
+        let (_, account) = try requireSession()
+        let r = try await call([
+            Invocation("Email/query", [
+                "accountId": account,
+                "filter": ["inMailbox": sentMailboxId, "after": JMAPDate.string(since)],
+                "sort": [["property": "receivedAt", "isAscending": false] as [String: Any]],
+                "collapseThreads": false, "limit": limit,
+            ], id: "q"),
+            Invocation("Email/get", [
+                "accountId": account,
+                "#ids": Invocation.ref("q", "Email/query", "/ids"),
+                "properties": EmailSummary.properties,
+            ], id: "s"),
+            Invocation("Thread/get", [
+                "accountId": account,
+                "#ids": Invocation.ref("s", "Email/get", "/list/*/threadId"),
+            ], id: "t"),
+            Invocation("Email/get", [
+                "accountId": account,
+                "#ids": Invocation.ref("t", "Thread/get", "/list/*/emailIds"),
+                "properties": EmailSummary.properties,
+            ], id: "g"),
+        ])
+        return (try response(r, "s", "Email/get").decode([EmailSummary].self, "list"),
+                try response(r, "g", "Email/get").decode([EmailSummary].self, "list"))
+    }
+
+    /// Messages scheduled with Send Later that haven't gone out yet.
+    public func scheduledSendCount() async throws -> Int {
+        let (_, account) = try requireSession()
+        let r = try await call([
+            Invocation("EmailSubmission/query", [
+                "accountId": account, "filter": ["undoStatus": "pending"],
+                "calculateTotal": true, "limit": 50,
+            ], id: "q"),
+        ], using: [JMAPCapability.submission])
+        let q = try response(r, "q", "EmailSubmission/query")
+        return q.int("total") ?? ((q.args["ids"] as? [String])?.count ?? 0)
     }
 
     public func summaries(ids: [String]) async throws -> [EmailSummary] {

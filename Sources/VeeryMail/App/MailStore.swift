@@ -51,6 +51,8 @@ final class MailStore {
         let extra = [0.3, 1.2, 1.4, 2.6, 3.1, 3.3, 5.2, 6.8, 9.5, 10.1, 13.4, 15.8, 22.0]
         inboxArrivals = messages.map(\.receivedAt).filter { $0 > Date().addingTimeInterval(-86_400) }
             + extra.map { Date().addingTimeInterval(-$0 * 3600) }
+        inboxRecent = messages.filter { $0.receivedAt > Date().addingTimeInterval(-86_400) }
+        cardStats = CardStatValues.demo(messages: messages)
         if let inbox = mailbox(role: "inbox") { source = .mailbox(inbox.id) }
         phase = .ready
     }
@@ -111,6 +113,13 @@ final class MailStore {
     private(set) var lastSync = Date.distantPast
     /// Arrival times of Inbox mail in the last 24 hours, for the sidebar's activity graph.
     private(set) var inboxArrivals: [Date] = []
+    /// Inbox mail from the last 24 hours (headers only), for "Top senders today".
+    private(set) var inboxRecent: [EmailSummary] = []
+    /// Values for the optional stats on the sidebar card. Only the stats you've chosen are fetched.
+    var cardStats = CardStatValues()
+    @ObservationIgnored private var statsRefreshedAt = Date.distantPast
+    @ObservationIgnored private var metaRefreshedAt = Date.distantPast
+    @ObservationIgnored private var recentMeta: [MailMeta] = []
     @ObservationIgnored private var openedRowId: String?
 
     private var defaults: UserDefaults { .standard }
@@ -188,6 +197,7 @@ final class MailStore {
                 lastError = nil
                 lastSync = Date()
                 refreshArrivals()
+                refreshStats(force: true)
                 requestNotificationPermission()
                 startPush()
                 startSnoozeTimer()
@@ -252,6 +262,7 @@ final class MailStore {
         cache.save(list, "mailboxes")
         let unread = mailbox(role: "inbox")?.unreadThreads ?? 0
         NSApp.dockTile.badgeLabel = unread > 0 ? "\(unread)" : nil
+        if !isDemo, let inbox = mailbox(role: "inbox") { StreakLedger.record(inboxCount: inbox.totalThreads) }
     }
 
     // MARK: List loading
@@ -401,6 +412,7 @@ final class MailStore {
             lastSync = Date()
             reloadList()
             refreshArrivals()
+            refreshStats()
         } catch JMAPError.method("cannotCalculateChanges", _) {
             emailState = nil
             reloadList()
@@ -419,6 +431,121 @@ final class MailStore {
             if let page = try? await client.queryEmails(filter: ["inMailbox": inbox.id, "after": since],
                                                         limit: 250, collapseThreads: false) {
                 inboxArrivals = page.emails.map(\.receivedAt)
+                inboxRecent = page.emails
+            }
+        }
+    }
+
+    // MARK: Sidebar card stats
+
+    /// Fetches the chosen stats. Cheap stats refresh at most every 5 minutes; the 4-week
+    /// history used by "Busiest hours" and "Mail load by folder" at most every 6 hours.
+    func refreshStats(force: Bool = false) {
+        let chosen = Set(CardStat.selected())
+        guard !isDemo, let client, !chosen.isEmpty,
+              UserDefaults.standard.object(forKey: "sidebar.showConditions") as? Bool ?? true else { return }
+        guard force || Date().timeIntervalSince(statsRefreshedAt) > 300 else { return }
+        statsRefreshedAt = Date()
+        let inbox = mailbox(role: "inbox"), sent = mailbox(role: "sent")
+        let mine = Set(identities.map { $0.email.lowercased() })
+        let waitDays = Double(defaults.object(forKey: "card.waitingDays") as? Int ?? 3)
+        let now = Date()
+
+        Task {
+            if chosen.contains(.oldestUnread), let inbox {
+                let page = try? await client.queryEmails(filter: ["inMailbox": inbox.id, "notKeyword": "$seen"],
+                                                         limit: 1, collapseThreads: false, oldestFirst: true)
+                if let page {
+                    cardStats.oldestUnread = page.emails.first
+                    cardStats.oldestUnreadLoaded = true
+                }
+            }
+            if chosen.contains(.replyDebt), let inbox {
+                let base: [String: Any] = ["inMailbox": inbox.id, "hasKeyword": "$seen", "notKeyword": "$answered",
+                                           "after": JMAPDate.string(now.addingTimeInterval(-14 * 86_400))]
+                // Leave out mailing lists: they're read, but nobody expects an answer.
+                let personal: [String: Any] = ["operator": "AND", "conditions": [
+                    base, ["operator": "NOT", "conditions": [["header": ["List-Id"]]]] as [String: Any],
+                ]]
+                var total = try? await client.queryEmails(filter: personal, limit: 1).total
+                if total == nil { total = try? await client.queryEmails(filter: base, limit: 1).total }
+                if let total { cardStats.replyDebt = total }
+            }
+            if chosen.contains(.waiting) || chosen.contains(.responseTime), let sent,
+               let r = try? await client.sentWithThreads(sentMailboxId: sent.id,
+                                                         since: now.addingTimeInterval(-14 * 86_400), limit: 150) {
+                cardStats.waiting = MailStats.waitingThreads(sent: r.sent, threadMail: r.threadMail,
+                                                             sentMailboxId: sent.id, myAddresses: mine,
+                                                             olderThan: waitDays * 86_400, now: now)
+                let delays = MailStats.replyDelays(sent: r.sent, threadMail: r.threadMail,
+                                                   sentMailboxId: sent.id, myAddresses: mine)
+                let weekAgo = now.addingTimeInterval(-7 * 86_400)
+                cardStats.replyThisWeek = MailStats.median(delays.filter { $0.sentAt > weekAgo }.map(\.delay))
+                cardStats.replyLastWeek = MailStats.median(delays.filter { $0.sentAt <= weekAgo }.map(\.delay))
+                cardStats.replyLoaded = true
+            }
+            if chosen.contains(.scheduled), let count = try? await client.scheduledSendCount() {
+                cardStats.scheduledSends = count
+            }
+            if chosen.contains(.busiestHours) || chosen.contains(.folderLoad) {
+                if force || now.timeIntervalSince(metaRefreshedAt) > 6 * 3600 {
+                    let skip = ["trash", "junk", "drafts", "sent"].compactMap { mailbox(role: $0)?.id }
+                    if let meta = try? await client.mailMeta(filter: ["after": JMAPDate.string(now.addingTimeInterval(-28 * 86_400)),
+                                                                      "inMailboxOtherThan": skip], limit: 1500) {
+                        recentMeta = meta
+                        metaRefreshedAt = now
+                    }
+                }
+                cardStats.busiest = MailStats.busiestWindow(recentMeta.map(\.receivedAt))
+                let order = ["inbox", "archive"].compactMap { mailbox(role: $0)?.id }
+                cardStats.folderLoad = MailStats.folderLoad(recentMeta.filter { $0.receivedAt > now.addingTimeInterval(-7 * 86_400) },
+                                                            preferredOrder: order)
+            }
+        }
+    }
+
+    /// Snoozed conversations and when the next one comes back.
+    var snoozeSummary: (count: Int, next: Date?) {
+        (Set(snoozes.map(\.threadId)).count, snoozes.map(\.until).min())
+    }
+
+    /// "Top senders today" → archive what that sender put in the Inbox (undoable).
+    func archiveFromSender(_ rows: [EmailSummary], name: String) {
+        guard let archive = mailbox(role: "archive"), let inbox = mailbox(role: "inbox"), !rows.isEmpty else { return }
+        let ids = Set(rows.map(\.id))
+        let viewingInbox = currentMailboxId == inbox.id
+        removeRows(rows)
+        inboxRecent.removeAll { ids.contains($0.id) }
+        Task {
+            do {
+                let originals = try await relocate(rows, to: archive.id, from: inbox.id)
+                showToast("Archived \(rows.count) from \(name)") { [weak self] in
+                    guard let self else { return }
+                    if self.currentMailboxId == inbox.id { self.restoreRows(rows) }
+                    Task {
+                        try? await self.client?.updateEmails(originals.mapValues { ["mailboxIds": $0] as [String: Any] })
+                        self.refreshArrivals()
+                    }
+                }
+            } catch {
+                if viewingInbox { restoreRows(rows) }
+                report(error)
+            }
+            refreshArrivals()
+        }
+    }
+
+    /// "Top senders today" → unsubscribe using that sender's newest message.
+    func unsubscribeFromSender(_ rows: [EmailSummary]) {
+        guard let latest = rows.max(by: { $0.receivedAt < $1.receivedAt }), let client else { return }
+        Task {
+            guard let detail = try? await client.details(ids: [latest.id]).first else {
+                return report(JMAPError.notConnected)
+            }
+            if detail.unsubscribeURL != nil {
+                unsubscribe(detail)
+            } else {
+                showToast("This sender's mail has no unsubscribe link", undo: nil)
             }
         }
     }

@@ -25,9 +25,22 @@ These come from looking at what Apple Mail, Mimestream, Spark, Airmail, MailMate
 - An editorial look: ink-blue navigation, a slightly lighter inbox, and a warm paper reader with a copper accent. Light and dark appearances, plus a dim reader for dark rooms (Settings → General).
 - **Top row**: Search / command field (⌘K) and New Message on the left; Reply, Reply All, Forward, Archive, Snooze, Flag, Read and Trash on the right. With several rows selected it shows "N selected", because the actions then apply to all of them.
 - **Sidebar**, borrowing ideas from weather apps such as Acme Weather and Dark Sky:
-  - **Inbox conditions card** (hide it under Settings → General → Appearance): the unread count as a large numeral, a one-word condition (Clear, Light, Steady, Busy, Stormy), and a forecast-style sentence ("3 new in the last hour · 12 today").
+  - **Inbox conditions card** (hide it under Settings → Summary Card): the unread count as a large numeral, a one-word condition (Clear, Light, Steady, Busy, Stormy), and a forecast-style sentence ("3 new in the last hour · 12 today").
   - A 24-hour graph of when mail arrived, with the current hour in copper.
   - A visible switch for new-mail alerts.
+  - **Up to three extra stats** of your choice (Settings → Summary Card):
+    - Oldest unread
+    - Streak (days the Inbox reached your target)
+    - Waiting on replies
+    - Reply debt (read but not answered)
+    - Typical response time (this week vs last)
+    - Trackers blocked this week
+    - Busiest hours
+    - Scheduled and snoozed
+    - Top senders today, with one-click Archive or Unsubscribe
+    - Mail load by folder
+
+    Only the stats you choose are fetched. The streak and tracker counts are kept on your Mac and count only while Veery Mail is running.
   - Favorites, then Archive / Spam / Trash, then a collapsible Folders section.
   - Folders holding unread mail get a thin copper intensity bar, scaled to the busiest folder.
   - Counts sit on the trailing edge, and long names truncate with the full name on hover.

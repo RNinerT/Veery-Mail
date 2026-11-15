@@ -148,3 +148,60 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(DayBucket.bucket(for: ago(24 * 90), now: now, calendar: cal), .older)
     }
 }
+
+final class MailStatsTests: XCTestCase {
+    private func mail(_ id: String, thread: String, from: String, hoursAgo: Double, now: Date,
+                      boxes: [String: Bool] = ["inbox": true], keywords: [String: Bool] = ["$seen": true]) -> EmailSummary {
+        EmailSummary(id: id, threadId: thread, mailboxIds: boxes, keywords: keywords,
+                     from: [EmailAddress(email: from)], receivedAt: now.addingTimeInterval(-hoursAgo * 3600))
+    }
+
+    func testMedian() {
+        XCTAssertNil(MailStats.median([]))
+        XCTAssertEqual(MailStats.median([3, 1, 2]), 2)
+        XCTAssertEqual(MailStats.median([4, 1, 2, 3]), 2.5)
+    }
+
+    func testStreakSkipsUnfinishedToday() {
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "UTC")!
+        let today = cal.date(from: DateComponents(year: 2026, month: 11, day: 15, hour: 12))!
+        func key(_ daysAgo: Int) -> String { MailStats.dayKey(today.addingTimeInterval(Double(-daysAgo) * 86_400), cal) }
+        let ledger = [key(0): 7, key(1): 0, key(2): 0, key(3): 5, key(4): 0]
+        XCTAssertEqual(MailStats.streak(dailyMinimum: ledger, target: 0, today: today, calendar: cal), 2)
+        XCTAssertEqual(MailStats.streak(dailyMinimum: ledger, target: 5, today: today, calendar: cal), 4)
+        XCTAssertEqual(MailStats.streak(dailyMinimum: [:], target: 0, today: today, calendar: cal), 0)
+    }
+
+    func testWaitingAndReplyDelays() {
+        let now = Date()
+        let mine: Set<String> = ["me@example.com"]
+        // t1: they wrote, I replied 2h later, no answer for 4 days -> waiting.
+        // t2: I wrote, they answered -> not waiting.
+        let t1in = mail("a", thread: "t1", from: "ann@example.com", hoursAgo: 98, now: now)
+        let t1out = mail("b", thread: "t1", from: "me@example.com", hoursAgo: 96, now: now, boxes: ["sent": true])
+        let t2out = mail("c", thread: "t2", from: "me@example.com", hoursAgo: 100, now: now, boxes: ["sent": true])
+        let t2in = mail("d", thread: "t2", from: "bob@example.com", hoursAgo: 90, now: now)
+        let sent = [t1out, t2out], all = [t1in, t1out, t2out, t2in]
+        XCTAssertEqual(MailStats.waitingThreads(sent: sent, threadMail: all, sentMailboxId: "sent",
+                                                myAddresses: mine, olderThan: 3 * 86_400, now: now), 1)
+        let delays = MailStats.replyDelays(sent: sent, threadMail: all, sentMailboxId: "sent", myAddresses: mine)
+        XCTAssertEqual(delays.count, 1)
+        XCTAssertEqual(delays[0].delay, 2 * 3600, accuracy: 1)
+    }
+
+    func testBusiestWindowAndFolderLoad() {
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "UTC")!
+        let base = cal.date(from: DateComponents(year: 2026, month: 11, day: 1))!
+        let dates = (0..<30).map { base.addingTimeInterval(Double($0 % 3 == 0 ? 14 : 9) * 3600 + Double($0) * 86_400) }
+        XCTAssertEqual(MailStats.busiestWindow(dates, calendar: cal)?.startHour, 9)
+        XCTAssertNil(MailStats.busiestWindow(Array(dates.prefix(5)), calendar: cal))
+
+        let meta = [MailMeta(id: "1", threadId: "1", receivedAt: base, mailboxIds: ["inbox": true, "label": true]),
+                    MailMeta(id: "2", threadId: "2", receivedAt: base, mailboxIds: ["archive": true]),
+                    MailMeta(id: "3", threadId: "3", receivedAt: base, mailboxIds: ["archive": true])]
+        let load = MailStats.folderLoad(meta, preferredOrder: ["inbox", "archive"])
+        XCTAssertEqual(load.first?.mailboxId, "archive")
+        XCTAssertEqual(load.first?.count, 2)
+        XCTAssertEqual(load.last?.mailboxId, "inbox")
+    }
+}
