@@ -249,36 +249,90 @@ struct LoginView: View {
     @Environment(MailStore.self) private var store
     @State private var token = ""
 
+    private static let steps: [(String, String)] = [
+        ("Open Fastmail in your browser and sign in.", "Use the button below, or go to app.fastmail.com."),
+        ("Go to Settings → Privacy & Security → Integrations.", "Then open the API tokens section."),
+        ("Choose New API token.", "Give it a name you will recognize, such as “Veery Mail on my Mac”."),
+        ("Set the access.", "Leave Read-only off, because Veery Mail needs to archive, delete and send. Turn on Mail, Email submission (so you can send) and Masked Email."),
+        ("Create the token and copy it.", "Fastmail shows the token only once, so copy it before closing the window. It starts with “fmu1-”."),
+        ("Paste it below and choose Sign In.", "Veery Mail keeps it in your Mac’s Keychain."),
+    ]
+
     var body: some View {
-        VStack(spacing: 18) {
-            Image(systemName: "bird")
-                .font(.system(size: 54))
-                .foregroundStyle(.tint)
-            Text("Veery Mail").font(.largeTitle.weight(.bold))
-            Text("A fast, native client for Fastmail.").foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Fastmail API token").font(.headline)
-                SecureField("fmu1-…", text: $token)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { store.signIn(token: token) }
-                Text("In Fastmail open **Settings → Privacy & Security → Manage API tokens → New API token**. Enable **Email** and **Masked Email** (and allow **Submission** so you can send). The token is stored in your Keychain.")
+        ScrollView {
+            VStack(spacing: 22) {
+                VStack(spacing: 6) {
+                    Image(systemName: "bird")
+                        .font(.system(size: 44))
+                        .foregroundStyle(Theme.accent)
+                        .accessibilityHidden(true)
+                    Text("Veery Mail").font(.largeTitle.weight(.bold))
+                    Text("A fast, native client for Fastmail. Sign in with an API token.")
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("How to create your API token").font(.headline)
+                    ForEach(Array(Self.steps.enumerated()), id: \.offset) { index, step in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text("\(index + 1)")
+                                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                                .frame(width: 22, height: 22)
+                                .background(Theme.accent.opacity(0.18), in: Circle())
+                                .foregroundStyle(Theme.accent)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(step.0).font(.callout.weight(.medium))
+                                Text(step.1).font(.callout).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Step \(index + 1). \(step.0) \(step.1)")
+                    }
+                    HStack(spacing: 14) {
+                        Link("Open Fastmail", destination: URL(string: "https://app.fastmail.com/")!)
+                        Link("Fastmail’s own guide", destination: URL(string: "https://www.fastmail.help/hc/en-us/articles/5254602856719")!)
+                    }
                     .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Link("How to create a Fastmail API token", destination: URL(string: "https://www.fastmail.help/hc/en-us/articles/5254602856719")!)
-                    .font(.callout)
+                    .padding(.top, 2)
+                    Text("Menu names can change slightly. If you do not see one, look for the page that lists API tokens.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(16)
+                .frame(width: 460, alignment: .leading)
+                .background(Theme.card, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.rim))
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Paste your token").font(.headline)
+                    HStack {
+                        SecureField("fmu1-…", text: $token)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit { store.signIn(token: token) }
+                        Button("Paste") {
+                            if let text = NSPasteboard.general.string(forType: .string) {
+                                token = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            }
+                        }
+                        .help("Paste the token from the clipboard")
+                    }
+                    if let error = store.lastError {
+                        Text(error).foregroundStyle(.red).font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(width: 460)
+
+                Button("Sign In") { store.signIn(token: token) }
+                    .keyboardShortcut(.defaultAction)
+                    .primaryButton()
+                    .disabled(token.isEmpty || store.phase == .connecting)
             }
-            .frame(width: 380)
-            if let error = store.lastError {
-                Text(error).foregroundStyle(.red).font(.callout).frame(width: 380)
-            }
-            Button("Sign In") { store.signIn(token: token) }
-                .keyboardShortcut(.defaultAction)
-                .primaryButton()
-                .disabled(token.isEmpty || store.phase == .connecting)
+            .padding(.vertical, 36)
+            .frame(maxWidth: .infinity)
         }
-        .padding(40)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -304,6 +358,7 @@ struct GeneralSettings: View {
     @AppStorage("defaultIdentityId") private var defaultIdentityId = ""
     @AppStorage("appearance") private var appearance = "dark"
     @AppStorage("readerDim") private var readerDim = false
+    @AppStorage("sidebar.showConditions") private var showConditions = true
 
     var body: some View {
         Form {
@@ -321,6 +376,7 @@ struct GeneralSettings: View {
                 }
             }
             Section("Appearance") {
+                Toggle("Show the Inbox summary card at the top of the sidebar", isOn: $showConditions)
                 Picker("Theme", selection: $appearance) {
                     Text("Ink (dark)").tag("dark")
                     Text("Light").tag("light")

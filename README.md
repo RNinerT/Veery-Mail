@@ -25,7 +25,7 @@ These come from looking at what Apple Mail, Mimestream, Spark, Airmail, MailMate
 - An editorial look: ink-blue navigation, a slightly lighter inbox, and a warm paper reader with a copper accent. Light and dark appearances, plus a dim reader for dark rooms (Settings → General).
 - **Top row**: Search / command field (⌘K) and New Message on the left; Reply, Reply All, Forward, Archive, Snooze, Flag, Read and Trash on the right. With several rows selected it shows "N selected", because the actions then apply to all of them.
 - **Sidebar**, borrowing ideas from weather apps such as Acme Weather and Dark Sky:
-  - **Inbox conditions card**: the unread count as a large numeral, a one-word condition (Clear, Light, Steady, Busy, Stormy), and a forecast-style sentence ("3 new in the last hour · 12 today").
+  - **Inbox conditions card** (hide it under Settings → General → Appearance): the unread count as a large numeral, a one-word condition (Clear, Light, Steady, Busy, Stormy), and a forecast-style sentence ("3 new in the last hour · 12 today").
   - A 24-hour graph of when mail arrived, with the current hour in copper.
   - A visible switch for new-mail alerts.
   - Favorites, then Archive / Spam / Trash, then a collapsible Folders section.
@@ -131,7 +131,17 @@ after:2026-01-01 before:2026-02-01 newer_than:7d older_than:1y
 
 ## Setup
 
-1. In Fastmail, go to **Settings → Privacy & Security → API tokens** and create a new token ([help](https://www.fastmail.help/hc/en-us/articles/5254602856719)). Give it access to **Email** (including sending) and **Masked Email**.
+1. **Create a Fastmail API token.** Veery Mail signs in with a token, not your password, and you can revoke the token in Fastmail at any time.
+   1. Sign in to Fastmail in your browser (app.fastmail.com).
+   2. Go to **Settings → Privacy & Security → Integrations**, then open **API tokens**.
+   3. Choose **New API token** and give it a name you will recognize, such as "Veery Mail on my Mac".
+   4. Set the access:
+      - Leave **Read-only** off. Veery Mail needs to archive, delete and send.
+      - Turn on **Mail**, **Email submission** (needed to send) and **Masked Email**.
+   5. Create the token and copy it. Fastmail shows it only once, and it starts with `fmu1-`.
+   6. Keep it handy for step 3 below.
+
+   Menu and option names can change slightly. If you do not see one, look for the page that lists API tokens. Fastmail's own guide is [here](https://www.fastmail.help/hc/en-us/articles/5254602856719). To stop Veery Mail from having access later, delete the token on the same page.
 2. Build and run:
 
    ```bash
@@ -140,7 +150,7 @@ after:2026-01-01 before:2026-02-01 newer_than:7d older_than:1y
    ```
 
    For development you can use `swift run VeeryMail`, or open `Package.swift` in Xcode and press ⌘R. When run outside an app bundle, notifications are turned off.
-3. Paste the token. It is saved to your Keychain.
+3. On the first screen, paste the token and choose **Sign In**. It is saved to your Keychain. The sign-in screen repeats these steps if you need them.
 
 Run the tests (they cover the core library: search parser, models, session and push parsing):
 

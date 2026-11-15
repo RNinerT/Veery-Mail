@@ -192,6 +192,7 @@ struct SidebarView: View {
     /// Ids of collapsed folders, comma-separated so it persists in UserDefaults.
     @AppStorage("sidebar.collapsedMailboxes") private var collapsedStorage = ""
     @AppStorage("sidebar.foldersExpanded") private var foldersExpanded = true
+    @AppStorage("sidebar.showConditions") private var showConditions = true
 
     private static let favoriteRoles = ["inbox", "drafts", "sent"]
     private static let systemRoles = ["archive", "junk", "trash"]
@@ -203,8 +204,10 @@ struct SidebarView: View {
         let peak = max(folders.map { tree.descendantUnread(of: $0.id) + MailboxTree.badgeCount($0) }.max() ?? 0, 1)
         ScrollView {
             VStack(alignment: .leading, spacing: 1) {
-                ConditionsCard()
-                    .padding(.top, Theme.Space.s)
+                if showConditions {
+                    ConditionsCard()
+                        .padding(.top, Theme.Space.s)
+                }
                 heading("Favorites")
                 role("inbox", tree)
                 SidebarRow(title: "Unread", icon: "envelope.badge", count: 0, isSelected: store.source == .unread,
@@ -255,6 +258,8 @@ struct SidebarView: View {
                 .overlay(alignment: .top) { Rectangle().fill(Theme.rim).frame(height: 1) }
         }
         .background(Theme.nav.ignoresSafeArea())
+        // The card's graph data is only fetched while the card is showing.
+        .onChange(of: showConditions) { _, showing in if showing { store.refreshArrivals() } }
         .contextMenu {
             Button("Expand All Folders") { collapsedStorage = "" }
             Button("Collapse All Folders") {

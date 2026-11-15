@@ -11,7 +11,7 @@ public enum JMAPError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .notConnected: return "Not connected to Fastmail."
-        case .http(401, _): return "Fastmail rejected the API token. Create a new one in Fastmail → Settings → Privacy & Security → API tokens."
+        case .http(401, _): return "Fastmail rejected the API token. Create a new one in Fastmail → Settings → Privacy & Security → Integrations → API tokens."
         case .http(let code, let body): return "HTTP \(code): \(body.prefix(200))"
         case .method(let type, let desc): return "JMAP error \(type)\(desc.map { ": \($0)" } ?? "")"
         case .setFailed(let msg): return msg

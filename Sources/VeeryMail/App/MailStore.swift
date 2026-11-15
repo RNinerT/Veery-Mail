@@ -412,7 +412,8 @@ final class MailStore {
     /// Loads when Inbox mail arrived over the last day. One small request; failures are ignored
     /// because the graph is decoration, not data the user acts on.
     func refreshArrivals() {
-        guard !isDemo, let client, let inbox = mailbox(role: "inbox") else { return }
+        guard !isDemo, UserDefaults.standard.object(forKey: "sidebar.showConditions") as? Bool ?? true,
+              let client, let inbox = mailbox(role: "inbox") else { return }
         let since = JMAPDate.string(Date().addingTimeInterval(-24 * 3600))
         Task {
             if let page = try? await client.queryEmails(filter: ["inMailbox": inbox.id, "after": since],
