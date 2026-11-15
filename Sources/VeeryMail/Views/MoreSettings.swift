@@ -125,8 +125,8 @@ struct AISettings: View {
             }
             Section("Never send") {
                 TextField("Senders or domains (comma-separated)", text: $excludedSenders)
-                ForEach(store.mailboxTree, id: \.mailbox.id) { item in
-                    Toggle(item.mailbox.name, isOn: mailboxBinding(item.mailbox.id))
+                ForEach(store.mailboxTree.map { $0.mailbox }) { mailbox in
+                    Toggle(mailbox.name, isOn: mailboxBinding(mailbox.id))
                 }
                 Button("Ask Again Before Each Action’s Next Use") { ai.resetConsents() }
             }

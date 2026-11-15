@@ -232,9 +232,11 @@ struct ComposeView: View {
         aiTask = Task {
             defer { aiTask = nil }
             controller.textView?.setSelectedRange(NSRange(location: 0, length: 0))
-            for try await event in DemoAIProvider().stream(system: "", user: "", maxTokens: 0) {
-                if case .text(let t) = event { controller.insert(t) }
-            }
+            do {
+                for try await event in DemoAIProvider().stream(system: "", user: "", maxTokens: 0) {
+                    if case .text(let t) = event { controller.insert(t) }
+                }
+            } catch {}
         }
     }
 
@@ -485,9 +487,9 @@ struct FormattingBar: View {
             Menu {
                 Button("Automatic") { controller.setColor(nil) }
                 Divider()
-                ForEach(Self.colors, id: \.0) { name, color in
-                    Button { controller.setColor(color) } label: {
-                        Label(name, systemImage: "circle.fill")
+                ForEach(Self.colors.indices, id: \.self) { i in
+                    Button { controller.setColor(Self.colors[i].1) } label: {
+                        Label(Self.colors[i].0, systemImage: "circle.fill")
                     }
                 }
             } label: {

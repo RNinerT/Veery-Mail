@@ -91,7 +91,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             store.outbox.suspendForQuit()
         }
         var failedSaves = 0
-        for id in dirty where !(await store.saveDraft(id)) { failedSaves += 1 }
+        for id in dirty {
+            if !(await store.saveDraft(id)) { failedSaves += 1 }
+        }
         if failedSaves > 0 {
             let alert = NSAlert()
             alert.messageText = failedSaves == 1 ? "A draft couldn’t be saved." : "\(failedSaves) drafts couldn’t be saved."
