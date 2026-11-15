@@ -228,9 +228,13 @@ final class MailStore {
         connectTask = Task {
             do {
                 try await client.connect()
-                guard isLive(gen), let key = client.accountKey else { return }
+                guard isLive(gen) else { return }
+                guard let key = client.accountKey else {
+                    throw JMAPError.unsupported("This Fastmail sign-in doesn’t include access to mail.")
+                }
                 if key != accountKey {
-                    resetAccountState()
+                    // Don't cancel this task: it is the connection that just succeeded.
+                    resetAccountState(keepConnection: true)
                     adoptAccount(key, paintFromCache: false)
                 }
                 defaults.set(key, forKey: "lastAccountKey")
@@ -301,8 +305,9 @@ final class MailStore {
     }
 
     /// Cancels all background work and forgets everything derived from the current account.
-    private func resetAccountState() {
-        for task in [pushTask, refreshTask, listTask, threadTask, connectTask] { task?.cancel() }
+    private func resetAccountState(keepConnection: Bool = false) {
+        for task in [pushTask, refreshTask, listTask, threadTask] { task?.cancel() }
+        if !keepConnection { connectTask?.cancel() }
         pushTask = nil; refreshTask = nil; listTask = nil; threadTask = nil
         snoozeTimer?.invalidate(); snoozeTimer = nil
         outbox.shutdown()
