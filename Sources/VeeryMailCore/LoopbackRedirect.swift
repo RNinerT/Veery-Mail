@@ -22,15 +22,17 @@ public final class LoopbackRedirectListener: @unchecked Sendable {
         let listener = try NWListener(using: params)
         self.listener = listener
         return try await withCheckedThrowingContinuation { (ready: CheckedContinuation<UInt16, Error>) in
-            var resumed = false
+            // The handler runs only on `queue` (serial), so this flag is never touched concurrently.
+            final class Once: @unchecked Sendable { var done = false }
+            let once = Once()
             listener.stateUpdateHandler = { state in
-                guard !resumed else { return }
+                guard !once.done else { return }
                 switch state {
                 case .ready:
-                    resumed = true
+                    once.done = true
                     ready.resume(returning: listener.port?.rawValue ?? 0)
                 case .failed(let error):
-                    resumed = true
+                    once.done = true
                     ready.resume(throwing: error)
                 default: break
                 }

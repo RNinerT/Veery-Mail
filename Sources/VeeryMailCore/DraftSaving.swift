@@ -74,14 +74,20 @@ public final class DraftSaveCoordinator {
     @discardableResult
     public func save(_ snapshot: DraftSnapshot) async -> Bool {
         guard !isRetired else { return false }
-        while let running = inFlight { _ = await running.value }
+        // Wait for the save ahead of this one. Awaiting a finished task returns without
+        // suspending, so clear its slot here rather than spinning until its caller does.
+        while let running = inFlight {
+            _ = await running.value
+            if inFlight == running { inFlight = nil }
+        }
         guard !isRetired else { return false }
         if snapshot == savedSnapshot { return true }
 
         let task = Task { await self.perform(snapshot) }
         inFlight = task
         let ok = await task.value
-        inFlight = nil
+        // A save queued behind this one may already have taken the slot.
+        if inFlight == task { inFlight = nil }
         return ok
     }
 

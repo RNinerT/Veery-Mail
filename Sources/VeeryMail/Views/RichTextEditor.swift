@@ -8,7 +8,8 @@ final class RichTextController {
     weak var textView: NSTextView?
     var onChange: (() -> Void)?
 
-    static let baseFont = NSFont.systemFont(ofSize: 14)
+    nonisolated static let baseSize: CGFloat = 14
+    static var baseFont: NSFont { NSFont.systemFont(ofSize: baseSize) }
 
     var attributedText: NSAttributedString { textView?.attributedString() ?? NSAttributedString() }
     var plainText: String { attributedText.string }
@@ -279,7 +280,7 @@ enum HTMLExporter {
                 if (attrs[.underlineStyle] as? Int ?? 0) != 0 { piece = "<u>\(piece)</u>" }
                 if (attrs[.strikethroughStyle] as? Int ?? 0) != 0 { piece = "<s>\(piece)</s>" }
                 var css: [String] = []
-                if let font, abs(font.pointSize - RichTextController.baseFont.pointSize) > 0.5 { css.append("font-size:\(Int(font.pointSize))px") }
+                if let font, abs(font.pointSize - RichTextController.baseSize) > 0.5 { css.append("font-size:\(Int(font.pointSize))px") }
                 if let color = attrs[.foregroundColor] as? NSColor, !quoted, let hex = hex(color) { css.append("color:\(hex)") }
                 if !css.isEmpty { piece = "<span style=\"\(css.joined(separator: ";"))\">\(piece)</span>" }
                 if let link = (attrs[.link] as? URL) ?? (attrs[.link] as? String).flatMap(URL.init(string:)),
@@ -301,7 +302,7 @@ enum HTMLExporter {
             if let font = attrs[.font] as? NSFont {
                 let traits = NSFontManager.shared.traits(of: font)
                 if traits.contains(.boldFontMask) || traits.contains(.italicFontMask)
-                    || abs(font.pointSize - RichTextController.baseFont.pointSize) > 0.5 { found = true }
+                    || abs(font.pointSize - RichTextController.baseSize) > 0.5 { found = true }
             }
             if (attrs[.underlineStyle] as? Int ?? 0) != 0 || (attrs[.strikethroughStyle] as? Int ?? 0) != 0 { found = true }
             if attrs[.link] != nil { found = true }

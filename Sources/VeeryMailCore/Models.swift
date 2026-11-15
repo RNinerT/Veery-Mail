@@ -345,12 +345,10 @@ public enum JMAPDate {
     /// JMAP UTCDate: "2026-11-14T09:30:00Z" (fractional seconds optional).
     public static func decoder() -> JSONDecoder {
         let d = JSONDecoder()
-        let plain = ISO8601DateFormatter()
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         d.dateDecodingStrategy = .custom { decoder in
             let s = try decoder.singleValueContainer().decode(String.self)
-            if let date = plain.date(from: s) ?? fractional.date(from: s) { return date }
+            if let date = (try? Date(s, strategy: .iso8601))
+                ?? (try? Date(s, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true))) { return date }
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
                                                     debugDescription: "Bad date \(s)"))
         }

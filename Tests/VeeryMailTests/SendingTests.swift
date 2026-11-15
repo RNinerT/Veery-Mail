@@ -241,15 +241,32 @@ final class DraftSavingTests: XCTestCase {
         var fail = false
         var hold: CheckedContinuation<Void, Never>?
         var holdNext = false
+        /// Set when release() runs before the held call has parked, so it doesn't wait at all.
+        var releasedEarly = false
         func create(_ snapshot: DraftSnapshot) async throws -> String {
             if lock.withLock({ holdNext }) {
-                await withCheckedContinuation { c in lock.withLock { hold = c; holdNext = false } }
+                await withCheckedContinuation { c in
+                    let resumeNow: Bool = lock.withLock {
+                        holdNext = false
+                        if releasedEarly { releasedEarly = false; return true }
+                        hold = c
+                        return false
+                    }
+                    if resumeNow { c.resume() }
+                }
             }
             if lock.withLock({ fail }) { throw URLError(.timedOut) }
             return lock.withLock { created.append(snapshot); return "D\(created.count)" }
         }
         func destroy(_ id: String) async throws { lock.withLock { destroyed.append(id) } }
-        func release() { lock.withLock { let h = hold; hold = nil; return h }?.resume() }
+        func release() {
+            let h: CheckedContinuation<Void, Never>? = lock.withLock {
+                let h = hold; hold = nil
+                if h == nil { releasedEarly = true }
+                return h
+            }
+            h?.resume()
+        }
     }
 
     func snap(to: String = "", subject: String = "", attachments: [OutgoingAttachment] = []) -> DraftSnapshot {
