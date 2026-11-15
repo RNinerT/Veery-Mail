@@ -1,6 +1,8 @@
 # Veery Mail
 
-A small, fast, native macOS mail client built only for **Fastmail**. It uses Fastmail's own protocol (JMAP), not IMAP.
+Veery Mail is an independent native macOS email client for Fastmail accounts. It connects directly to Fastmail using the standard JMAP protocol.
+
+Veery Mail is developed independently and has no affiliation with or endorsement from Fastmail. Fastmail is a trademark and service mark of Fastmail Pty Ltd.
 
 - SwiftUI with small AppKit/WebKit pieces. **No third-party dependencies.**
 - macOS 14 (Sonoma) or later. Builds with Swift 5.10 (Xcode 15.3 or later).
@@ -120,8 +122,8 @@ after:2026-01-01 before:2026-02-01 newer_than:7d older_than:1y
 - Recipient autocomplete from people you've exchanged mail with. This needs no extra network calls.
 - Handles `mailto:` links, so Veery Mail can be your default mail app.
 
-**Fastmail-only**
-- **Masked Email manager** (⇧⌘M): search, create and copy in one step, and block or unblock addresses.
+**Optional Fastmail account feature**
+- **Masked Email manager** (⇧⌘M): search, create, copy, block or unblock masked addresses when available to the account and authorized by the user. Standard mail features work without this permission.
 
 **Mac integration**
 - Notifications for new Inbox mail, shown only when the app is in the background.
@@ -142,9 +144,11 @@ after:2026-01-01 before:2026-02-01 newer_than:7d older_than:1y
 | `/` or ⌘K | Command palette | Esc | Clear selection |
 | ⌘↩ | Send | ⌘Z | Undo (after an action or send) |
 
-## Setup
+## Development setup
 
-1. **Create a Fastmail API token.** Veery Mail signs in with a token, not your password, and you can remove the token in Fastmail at any time. API tokens are not available on Fastmail's Basic plans.
+This build uses a personal JMAP API token for local development and testing. Before distributing builds publicly, Veery Mail should offer OAuth sign-in and publish a privacy policy, user agreement and support contact. See [Fastmail’s developer documentation](https://www.fastmail.com/dev/), [API Terms of Service](https://www.fastmail.com/policies/api-terms-of-service/) and [API Developer Policy](https://www.fastmail.com/policies/api-developer-policy/).
+
+1. **Create a personal Fastmail API token.** Enter it only in your local copy of Veery Mail. You can revoke it in Fastmail at any time. Fastmail’s Basic plans do not include API tokens.
    1. Sign in to Fastmail in your browser and go to [Settings → Privacy & Security](https://app.fastmail.com/settings/security).
    2. Find **Connected apps & API tokens** and click **Manage API tokens**. Fastmail may ask for your password to verify it's you.
    3. Click **New API token** and enter a name you will recognize later, such as "Veery Mail on my Mac".
@@ -152,11 +156,11 @@ after:2026-01-01 before:2026-02-01 newer_than:7d older_than:1y
    5. Under **Scopes**, turn on:
       - **Email**: read, change and delete mail.
       - **Email submission**: send mail. It needs **Email** turned on too.
-      - **Masked Email**: for the Masked Email manager.
+      - **Masked Email** (optional): enable only if you are testing the Masked Email manager.
 
       Leave **Read-only access** off, because Veery Mail archives, deletes and sends.
    6. Click **Generate API token** and copy the token. Fastmail shows it only once, so copy it before you click **Done**. It starts with `fmu1-`.
-   7. Keep it handy for step 3 below.
+   7. Keep it handy for step 3 below. Keep it out of source control, screenshots and issue reports.
 
    Fastmail's own guide is [here](https://www.fastmail.help/hc/en-us/articles/5254602856719). To remove Veery Mail's access later, go back to **Manage API tokens**, click the token, and choose **Remove access**.
 2. Build and run:
@@ -200,7 +204,8 @@ Sources/VeeryMail/
 - **Snooze** moves the conversation to a `Later` mailbox. Veery Mail moves it back when the time comes. This happens only while Veery Mail is running, or at the next launch. Fastmail's own server-side snooze uses a vendor extension that isn't public, so it isn't used here.
 - The inbox has hover buttons instead of trackpad swipe actions. The earlier Classic layout was removed.
 - The app icon is still black and silver and has not been recolored to match the ink and copper theme.
-- You sign in with an API token. "Sign in with Fastmail" (OAuth) would need Fastmail to register Veery Mail as a client.
+- This development build uses a personal API token. Fastmail documents OAuth for public distribution. Its native-client OAuth flow supports a loopback or private-use redirect without manual registration. A public redirect URI requires registration.
+- Before enabling Masked Email in a public build, confirm the integration with [Fastmail partnerships](https://www.fastmail.help/hc/en-us/articles/4951369076879-Partnering-with-Fastmail).
 - Compose sends plain text only. There is no rich-text editor yet.
 - One Fastmail account.
 - Message bodies are not cached for offline reading. Lists and mailboxes are.
@@ -208,7 +213,7 @@ Sources/VeeryMail/
 
 ## Ideas for later
 
-- AI triage and summaries with Claude: summarize a thread, draft a reply, sort the inbox.
+- Optional AI-assisted triage, summaries and reply drafts, subject to a separate review of Fastmail’s data-use terms and explicit user authorization for any external processing.
 - Rich-text compose with Markdown → HTML.
 - Fastmail contacts for autocomplete (JMAP Contacts).
 - Offline body cache in SQLite, with full-text search on the device.
