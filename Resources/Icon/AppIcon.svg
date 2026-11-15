@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#34353A"/>
+      <stop offset="0.5" stop-color="#16171A"/>
+      <stop offset="1" stop-color="#050506"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.28" cy="0.18" r="0.85">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Brushed silver, lit from the upper left. -->
+    <linearGradient id="silver" gradientUnits="userSpaceOnUse" x1="300" y1="260" x2="620" y2="760">
+      <stop offset="0" stop-color="#FAFBFC"/>
+      <stop offset="0.45" stop-color="#D5D8DD"/>
+      <stop offset="1" stop-color="#9DA2AA"/>
+    </linearGradient>
+    <linearGradient id="wing" gradientUnits="userSpaceOnUse" x1="330" y1="430" x2="560" y2="640">
+      <stop offset="0" stop-color="#B9BDC4"/>
+      <stop offset="1" stop-color="#80858E"/>
+    </linearGradient>
+    <linearGradient id="branch" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5B5F67"/>
+      <stop offset="1" stop-color="#8E939B"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+    <filter id="tileShadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+    <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <clipPath id="bodyClip">
+      <path id="bodyPath" d="
+        M 664 304
+        C 664 262, 632 240, 598 240
+        C 562 240, 536 266, 534 300
+        C 486 326, 446 380, 432 450
+        C 420 510, 424 580, 452 626
+        C 500 662, 582 642, 612 560
+        C 630 510, 628 430, 640 380
+        C 650 356, 664 334, 664 304 Z"/>
+    </clipPath>
+    <radialGradient id="belly" gradientUnits="userSpaceOnUse" cx="600" cy="560" r="130">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- macOS icon tile: 824pt body on a 1024 canvas -->
+  <g filter="url(#tileShadow)">
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  </g>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#glow)"/>
+  <rect x="103" y="103" width="818" height="818" rx="182" fill="none" stroke="#C8CCD2" stroke-opacity="0.22" stroke-width="6"/>
+
+  <g transform="translate(512 540) scale(1.1) translate(-512 -540)">
+  <!-- branch -->
+  <g clip-path="url(#tile)">
+    <path d="M 196 762 C 340 744, 560 738, 836 754" stroke="url(#branch)" stroke-width="22" stroke-linecap="round" fill="none"/>
+    <path d="M 712 746 C 750 722, 784 700, 812 688" stroke="url(#branch)" stroke-width="12" stroke-linecap="round" fill="none"/>
+  </g>
+
+  <!-- Veery, a woodland thrush: upright, long-legged, long-tailed, perched facing right -->
+  <g filter="url(#shadow)">
+    <!-- legs and toes -->
+    <path d="M 534 634 L 524 744 M 566 626 L 574 742 M 508 746 L 540 746 M 560 744 L 592 744"
+          stroke="#8E939B" stroke-width="9" stroke-linecap="round" fill="none"/>
+    <!-- long tail, behind the body -->
+    <path d="M 436 586 C 452 610, 470 624, 486 632 L 410 776 C 394 782, 372 776, 358 764 Z" fill="url(#wing)"/>
+    <!-- slender thrush bill -->
+    <path d="M 658 292 L 718 306 L 658 316 Z" fill="#B9BDC4"/>
+    <use href="#bodyPath" fill="url(#silver)"/>
+  </g>
+  <g clip-path="url(#bodyClip)">
+    <!-- pale belly -->
+    <rect x="300" y="200" width="500" height="600" fill="url(#belly)"/>
+    <!-- folded wing; its tip reaches over the base of the tail -->
+    <path d="M 476 388 C 548 392, 596 450, 590 520 C 580 584, 522 640, 452 694 C 438 650, 430 600, 432 540 C 434 470, 448 420, 476 388 Z" fill="url(#wing)"/>
+    <path d="M 470 470 C 510 500, 540 530, 566 566" stroke="#6E737C" stroke-opacity="0.5" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <path d="M 452 530 C 490 560, 516 590, 538 620" stroke="#6E737C" stroke-opacity="0.5" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <!-- the veery's faint, small spots on the throat and upper breast -->
+    <g fill="#7C818A" fill-opacity="0.5">
+      <circle cx="624" cy="372" r="5"/><circle cx="612" cy="390" r="5"/><circle cx="630" cy="398" r="4.5"/>
+      <circle cx="600" cy="408" r="4.5"/><circle cx="618" cy="418" r="4.5"/><circle cx="634" cy="428" r="4"/>
+      <circle cx="606" cy="436" r="4"/><circle cx="624" cy="448" r="3.5"/>
+    </g>
+  </g>
+  <!-- eye, with the soft pale eye-ring -->
+  <circle cx="612" cy="286" r="15" fill="#E8EAED" fill-opacity="0.8"/>
+  <circle cx="612" cy="286" r="10" fill="#141518"/>
+  <circle cx="615.5" cy="282.5" r="3.2" fill="#FFFFFF" fill-opacity="0.85"/>
+  </g>
+</svg>

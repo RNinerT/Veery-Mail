@@ -1,0 +1,122 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Veery Mail design mockup</title>
+<style>
+:root{--sans:-apple-system,"SF Pro Text","Inter","Helvetica Neue",Arial,sans-serif;--serif:"New York","Iowan Old Style","Charter","Georgia",serif}
+body.dark{--nav:#141C26;--inbox:#1B2532;--card:#243040;--rim:rgba(255,255,255,.10);--sel:#2A3748;--hover:#222E3D;--text:#E9EDF2;--sec:#A3ADBA;--accent:#DB8F55;--unread:#7FB2F0;--flag:#F0B255;--paper:#F4EFE6;--ink:#1F2328;--ink2:#5A5F66;--rule:rgba(0,0,0,.13);--link:#8F4513}
+body.dark.dim{--paper:#22262C;--ink:#E8E3DA;--ink2:#ABA79F;--rule:rgba(255,255,255,.13);--link:#E3A572}
+body.light{--nav:#E3E8EF;--inbox:#EEF1F6;--card:#fff;--rim:rgba(0,0,0,.10);--sel:#D9E0EA;--hover:#E4E9F0;--text:#1B2430;--sec:#525C69;--accent:#9A4A17;--unread:#2563B8;--flag:#A35F00;--paper:#FBF8F2;--ink:#1F2328;--ink2:#5A5F66;--rule:rgba(0,0,0,.13);--link:#8F4513}
+*{box-sizing:border-box}html,body{margin:0;height:100%;font:13px var(--sans);-webkit-font-smoothing:antialiased}
+.win{display:grid;grid-template-columns:var(--side,220px) var(--list,370px) 1fr;grid-template-rows:52px 1fr;height:100vh;background:var(--inbox);color:var(--text)}
+.tb{grid-column:1/-1;background:var(--nav);display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--rim)}
+.dots{display:flex;gap:8px;width:calc(var(--side,220px) - 14px)}.dots i{width:12px;height:12px;border-radius:50%;background:#ff5f57}.dots i:nth-child(2){background:#febc2e}.dots i:nth-child(3){background:#28c840}
+.search{width:230px;height:26px;border-radius:7px;background:var(--inbox);border:1px solid var(--rim);color:var(--sec);display:flex;align-items:center;padding:0 10px;gap:8px}.search span{margin-left:auto;font:11px ui-monospace,Menlo,monospace}
+.ic{color:var(--sec);font-size:13px;padding:4px 7px;border-radius:6px;white-space:nowrap}.ic.lbl{color:var(--text)}.grow{flex:1}
+.side{background:var(--nav);padding:0 8px 16px;overflow:hidden}
+.h{font-size:10.5px;font-weight:600;letter-spacing:.8px;color:var(--sec);padding:16px 8px 4px;display:flex}
+.sr{height:28px;display:flex;align-items:center;gap:8px;padding:0 8px 0 18px;border-radius:6px;margin-bottom:1px}.sr.on{background:var(--sel);font-weight:600}.sr b{font-weight:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}.sr em{font-style:normal;color:var(--sec);font-size:12px}.sr .g{width:18px;color:var(--sec);text-align:center;font-size:12px}.sr.sub{padding-left:32px}
+.side{display:flex;flex-direction:column}.sscroll{flex:1;overflow:hidden}
+.card{background:var(--inbox);border:1px solid var(--rim);border-radius:10px;padding:12px;margin-top:8px}
+.card .lab{font-size:10.5px;font-weight:600;letter-spacing:.8px;color:var(--sec)}
+.card .big{display:flex;align-items:baseline;gap:8px}.card .num{font-size:46px;font-weight:300;line-height:1.05;font-variant-numeric:tabular-nums}
+.card .cond{color:var(--accent);font-weight:600;font-size:13px}.card .u{font-size:12px;color:var(--sec)}
+.card .sum{font-size:12px;color:var(--sec);margin-top:2px}
+.graph{display:flex;align-items:flex-end;gap:2px;height:30px;margin-top:10px}.graph i{flex:1;border-radius:1.5px;background:color-mix(in srgb,var(--sec) 55%,transparent)}.graph i.z{background:color-mix(in srgb,var(--sec) 18%,transparent)}.graph i.now{background:var(--accent)}
+.ax{display:flex;justify-content:space-between;font-size:9.5px;font-weight:500;color:var(--sec);margin-top:3px}
+.bell{font-size:12px;margin-top:8px}
+.sr{position:relative}.sr .bar{position:absolute;left:44px;bottom:3px;height:2px;border-radius:2px;background:color-mix(in srgb,var(--accent) 55%,transparent)}
+.foot{border-top:1px solid var(--rim);padding:8px 8px 10px;font-size:12px;color:var(--sec);display:flex;align-items:center;gap:6px}.foot i{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.list{background:var(--inbox);overflow:hidden;border-right:1px solid var(--rim)}
+.lh{display:flex;align-items:baseline;padding:12px 20px 4px 32px}.lh h1{margin:0;font-size:22px;font-weight:700}.lh span{margin-left:auto;color:var(--sec);font-size:12px}
+.sec{font-size:10.5px;font-weight:600;letter-spacing:1.1px;color:var(--sec);padding:16px 0 8px 32px}
+.row{position:relative;margin:0 8px;padding:8px 12px 8px 8px;border-radius:7px;display:grid;grid-template-columns:16px 1fr;border:1.5px solid transparent}
+.row:after{content:"";position:absolute;left:24px;right:12px;bottom:-1px;height:1px;background:var(--rim)}
+.row.open{background:color-mix(in srgb,var(--accent) 16%,var(--inbox))}.row.open:before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:3px;border-radius:1.5px;background:var(--accent)}
+.row.sel{background:var(--sel);border-color:color-mix(in srgb,var(--sec) 60%,transparent)}.row.cur{border-color:color-mix(in srgb,var(--text) 70%,transparent)}.row.hov{background:var(--hover)}
+.row.open:after,.row.sel:after,.row.hov:after{display:none}
+.row>div{min-width:0}.dot{width:8px;height:8px;border-radius:50%;margin-top:4px}.un .dot{background:var(--unread)}
+.l1,.l2{display:flex;gap:8px;align-items:baseline}.l1 b{font-weight:400;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.un .l1 b{font-weight:600}
+.l1 time{color:var(--sec);font-size:11px;font-variant-numeric:tabular-nums}
+.l2{font-size:12.5px;margin-top:2px}.l2 s{text-decoration:none;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.un .l2 s{font-weight:500}
+.l2 i{font-style:normal;width:13px;font-size:10px;color:var(--sec);text-align:center}.l2 i.f{color:var(--flag)}
+.pv{font-size:12px;color:var(--sec);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qa{position:absolute;right:6px;bottom:5px;background:var(--card);border:1px solid var(--rim);border-radius:99px;padding:2px 8px;font-size:11px;letter-spacing:6px}
+.read{background:var(--paper);color:var(--ink);overflow:hidden}
+.sheet{max-width:840px;margin:0 auto;padding:32px 40px 40px}
+.subj{font:600 30px/1.2 var(--serif);margin:0}.cnt{font-size:12px;color:var(--ink2);margin-top:4px}
+.msg{border-top:1px solid var(--rule);margin-top:16px;padding-top:16px}
+.from{display:flex;align-items:baseline;gap:8px}.from b{font-size:15px}.from span{font-size:12px;color:var(--ink2)}.from a{margin-left:auto;font-size:12px;color:var(--link)}
+.meta{font-size:12px;color:var(--ink2);margin-top:3px}
+.body{font-size:15px;line-height:1.55;max-width:700px;margin-top:12px;white-space:pre-line}.body a{color:var(--link)}
+.priv{font-size:12px;color:var(--ink2);margin-top:12px}.priv a{color:var(--link)}
+.html{margin-top:12px;border:1px solid var(--rule);border-radius:6px;overflow:hidden;background:#fff}
+.html .nl{width:920px;transform-origin:0 0;font-family:Georgia,serif;color:#222;background:#fdfaf3}
+.nl .mast{background:#1d3b53;color:#fff;padding:28px 36px;font-size:34px;letter-spacing:1px}.nl .in{padding:28px 36px;font-size:17px;line-height:1.6}.nl h2{margin:0 0 12px;font-size:26px}
+.nl .cols{display:grid;grid-template-columns:1fr 1fr 1fr;background:#f0e7d6;margin:18px 0}.nl .cols div{padding:14px}
+.att{display:inline-flex;gap:8px;align-items:center;border:1px solid var(--rule);border-radius:6px;padding:6px 8px;margin-top:12px;width:260px}.att b{font-size:12.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.att span{font-size:11px;color:var(--ink2);display:block}
+.tag{position:fixed;right:10px;bottom:8px;font:11px var(--sans);color:#888;background:rgba(0,0,0,.55);color:#fff;padding:3px 8px;border-radius:4px}
+</style></head><body>
+<div class="win" id="win">
+ <div class="tb"><div class="dots"><i></i><i></i><i></i></div>
+  <div class="search">⌕ Search or command<span>⌘K</span></div><div class="ic">✎</div><div class="grow"></div>
+  <div class="ic" id="selcount" style="color:var(--accent);font-weight:600;display:none">2 selected</div>
+  <div class="ic lbl">↩ Reply</div><div class="ic">↩↩</div><div class="ic">↪</div><div class="ic">▤ Archive</div><div class="ic">◷</div><div class="ic">⚑</div><div class="ic">✉</div><div class="ic">🗑</div></div>
+ <div class="side"><div class="sscroll">
+  <div class="card"><div class="lab">INBOX</div>
+   <div class="big"><span class="num">3</span><div><div class="cond">⛅ Light</div><div class="u">unread</div></div></div>
+   <div class="sum">2 new in the last hour · 9 today</div>
+   <div class="graph" id="graph"></div><div class="ax"><span>4 PM</span><span>3 AM</span><span>Now</span></div>
+   <div class="bell">🔔 New mail alerts on</div></div>
+  <div class="h">FAVORITES</div>
+  <div class="sr on"><span class="g">▣</span><b>Inbox</b><em>3</em></div><div class="sr"><span class="g">✉</span><b>Unread</b></div><div class="sr"><span class="g">⚑</span><b>Flagged</b></div><div class="sr"><span class="g">▢</span><b>Drafts</b><em>2</em></div><div class="sr"><span class="g">➤</span><b>Sent</b></div>
+  <div class="h">MAILBOXES</div>
+  <div class="sr"><span class="g">▤</span><b>Archive</b></div><div class="sr"><span class="g">⊠</span><b>Spam</b></div><div class="sr"><span class="g">🗑</span><b>Trash</b></div>
+  <div class="h">FOLDERS&nbsp;<span style="opacity:.8">5</span><span style="margin-left:auto">⌄</span></div>
+  <div class="sr"><span class="g">▭</span><b>Family</b></div>
+  <div class="sr"><span class="g">▭</span><b>Harbor Street Renovation — Contractors and Permits</b></div>
+  <div class="sr"><span class="g">▭</span><b>Newsletters</b><em>12</em><span class="bar" style="width:calc((100% - 52px))"></span></div>
+  <div class="sr"><span class="g">▭</span><b>Northfield Community Orchestra Board</b></div>
+  <div class="sr" style="padding-left:6px"><span style="width:10px;color:var(--sec);font-size:9px">▾</span><span class="g">▭</span><b>Receipts</b></div>
+  <div class="sr sub"><span class="g">▭</span><b>2026 Quarterly Estimated Taxes and Filings</b><em>1</em></div>
+  <div class="sr sub"><span class="g">▭</span><b>Travel</b></div>
+ </div><div class="foot"><i></i>Updated just now</div></div>
+ <div class="list"><div class="lh"><h1>Inbox</h1><span>3 unread</span></div><div id="rows"></div></div>
+ <div class="read"><div class="sheet" id="sheet"></div></div>
+</div><div class="tag">Design mockup from the app's tokens · fictional mail · not an app screenshot</div>
+<script>
+const H=[1,0,0,0,0,0,0,0,0,0,0,1,0,0,1,0,1,0,2,1,1,0,1,2];document.getElementById('graph').innerHTML=H.map((v,i)=>`<i class="${i==23?'now':v?'':'z'}" style="height:${v?Math.max(3,30*v/2):2}px"></i>`).join('');
+const q=new URLSearchParams(location.search),theme=q.get('theme')||'dark',view=q.get('view')||'plain';
+document.body.className=theme.replace('-',' ');
+if(innerWidth<1100){win.style.setProperty('--side','180px');win.style.setProperty('--list','300px')}
+const R=[["Today"],
+["Imani Okafor","Re: Draft agenda for Thursday","That works. I moved the budget item to the top so we don't run out of time again.","9:42 AM","un",0,0,"plain"],
+["The Long Shelf","This week: twelve books for the darkest month, and a quarrel about footnotes","Our winter reading list, an interview with a translator, and letters from readers.","8:06 AM","un",0,0,"news"],
+["Mateo Reyes","Quote for the kitchen cabinets","Attached is the revised quote with the oak fronts. It is valid for thirty days.","5:48 AM","",1,1],
+["Northfield Orchestra","Minutes from the November board meeting and the vote on the spring programme, including the amended budget","Minutes attached. Please reply by Friday if anything is recorded incorrectly.","3:18 AM","un",1,0],
+["Yesterday"],
+["Priya Raman","Photos from Saturday","Finally sorted through them. The one of the dog on the pier is my favourite.","Yesterday","",1,0],
+["Lakeshore Utilities","Your November statement is ready","Amount due: 84.20. Payment will be taken on the 28th.","Yesterday","",0,0],
+["Previous 7 Days"],
+["Jonas Lindqvist","Lunch next week?","I'm in town Tuesday through Thursday. Is the place on Elm Street still good?","Thu","",0,0],
+["Fernhill Library","Two items are due soon","The Overstory and one other item are due on 22 November.","Tue","",0,0],
+["Previous 30 Days"],["Sam Whitlock","Spare key","Left it with the neighbour at number 14. Thanks again for watering the plants.","10/29/26","",0,0]];
+const multi=view==='states';let n=0;
+rows.innerHTML=R.map(r=>{if(r.length==1)return`<div class="sec">${r[0].toUpperCase()}</div>`;n++;
+ let st=multi?(n==3||n==4?'sel':n==5?'cur':n==6?'hov':''):((view==='news'?r[7]==='news':r[7]==='plain')?'open':'');
+ return`<div class="row ${r[4]} ${st}"><div class="dot"></div><div><div class="l1"><b>${r[0]}</b><time>${r[3]}</time></div><div class="l2"><s>${r[1]}</s><i>${r[5]?'📎':''}</i><i class="f">${r[6]?'⚑':''}</i></div><div class="pv">${r[2]}</div></div>${st=='hov'?'<div class="qa">▤🗑✉◷</div>':''}</div>`}).join('');
+if(multi){selcount.style.display='block';sheet.innerHTML=`<div style="text-align:center;margin-top:220px;color:var(--ink2)"><div style="font-size:40px">▤</div><h2 style="color:var(--ink);font:600 20px var(--sans)">2 Conversations Selected</h2>The toolbar actions apply to all of them.</div>`}
+else if(view==='news'){sheet.innerHTML=`<h1 class="subj">This week: twelve books for the darkest month, and a quarrel about footnotes</h1>
+<div class="msg"><div class="from"><b>The Long Shelf</b><span>longshelf.example</span><a href="#">Unsubscribe</a></div><div class="meta">to me  ·  Nov 15, 2026 at 8:06 AM</div>
+<div class="html" id="hw"><div class="nl" id="nl"><div class="mast">THE LONG SHELF</div><div class="in"><h2>Twelve books for the darkest month</h2><p>Every November we ask the same question: what do you read when the light goes at four? This year's answers run from a history of lighthouses to a novel told entirely in marginal notes.</p><div class="cols"><div><b>The Lamp Keepers</b><br>A century of solitary work, told through logbooks.</div><div><b>Marginalia</b><br>A love story in the white space of a borrowed book.</div><div><b>Salt Roads</b><br>Walking the old trade routes of the northern coast.</div></div><p>Also in this issue: a quarrel about footnotes, and <a href="#">letters from readers</a>.</p><p style="font-size:13px;color:#666">You are receiving this because you subscribed at longshelf.example.</p></div></div></div></div>`;
+ const z=Math.min(1,hw.clientWidth/920);nl.style.transform=`scale(${z})`;hw.style.height=nl.offsetHeight*z+'px'}
+else sheet.innerHTML=`<h1 class="subj">Re: Draft agenda for Thursday</h1><div class="cnt">2 messages</div>
+<div class="msg"><div class="from"><b>Robin Vale</b><span>example.com</span></div><div class="meta">Nov 14, 2026 at 2:20 PM  ·  Hi Imani, Here is the draft agenda for Thursday. I kept it to four items so we can finish in an hour…</div></div>
+<div class="msg"><div class="from"><b>Imani Okafor</b><span>fernhill.example</span></div><div class="meta">to me  ·  Nov 15, 2026 at 9:42 AM</div>
+<div class="body">Hi Robin,
+
+That works. I moved the budget item to the top so we don't run out of time again. Last month we spent forty minutes on the volunteer schedule and never reached the numbers.
+
+Two small things. Dana asked whether we can talk about the roof estimate, which could go under any other business. And the reading room question needs the caretaker's answer first, so I have asked him to reply before Wednesday: <a href="#">https://fernhill.example/rooms</a>
+
+Send it whenever you are ready.
+
+Imani</div></div>`;
+</script></body></html>
