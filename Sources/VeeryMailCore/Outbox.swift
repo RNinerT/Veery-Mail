@@ -340,7 +340,9 @@ public final class OutboxController {
             let found = try await sender.reconcile(item)
             if found.wasSubmitted {
                 if let created = found.emailIds.first { update(id) { $0.createdEmailId = created } }
-                await finishAccepted(id, movedToSent: found.inSent)
+                // The move to Sent ran in the same request as the submission. A pending or scheduled
+                // submission may not show there yet, so absence isn't reported as a problem.
+                await finishAccepted(id, movedToSent: found.inSent ? true : nil)
             } else {
                 // Not submitted. A created copy (if any) is reused by a retry, so nothing is duplicated.
                 update(id) {
