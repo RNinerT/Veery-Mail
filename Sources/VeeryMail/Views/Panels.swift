@@ -250,11 +250,12 @@ struct LoginView: View {
     @State private var token = ""
 
     private static let steps: [(String, String)] = [
-        ("Open Fastmail in your browser and sign in.", "Use the button below, or go to app.fastmail.com."),
-        ("Go to Settings → Privacy & Security → Integrations.", "Then open the API tokens section."),
-        ("Choose New API token.", "Give it a name you will recognize, such as “Veery Mail on my Mac”."),
-        ("Set the access.", "Leave Read-only off, because Veery Mail needs to archive, delete and send. Turn on Mail, Email submission (so you can send) and Masked Email."),
-        ("Create the token and copy it.", "Fastmail shows the token only once, so copy it before closing the window. It starts with “fmu1-”."),
+        ("Sign in to Fastmail in your browser and open Settings → Privacy & Security.", "The button below opens that page."),
+        ("Find Connected apps & API tokens and click Manage API tokens.", "Fastmail may ask for your password to verify it’s you."),
+        ("Click New API token and enter a name.", "Use something you will recognize later, such as “Veery Mail on my Mac”."),
+        ("Under Type, choose JMAP.", "Not MCP. Veery Mail talks to Fastmail over JMAP."),
+        ("Under Scopes, turn on Email, Email submission and Masked Email.", "Email submission lets you send, and it needs Email turned on too. Leave Read-only access off, because Veery Mail archives, deletes and sends."),
+        ("Click Generate API token, then copy the token.", "Fastmail shows it only once, so copy it before you click Done. It starts with “fmu1-”."),
         ("Paste it below and choose Sign In.", "Veery Mail keeps it in your Mac’s Keychain."),
     ]
 
@@ -291,12 +292,12 @@ struct LoginView: View {
                         .accessibilityLabel("Step \(index + 1). \(step.0) \(step.1)")
                     }
                     HStack(spacing: 14) {
-                        Link("Open Fastmail", destination: URL(string: "https://app.fastmail.com/")!)
+                        Link("Open Fastmail Privacy & Security", destination: URL(string: "https://app.fastmail.com/settings/security")!)
                         Link("Fastmail’s own guide", destination: URL(string: "https://www.fastmail.help/hc/en-us/articles/5254602856719")!)
                     }
                     .font(.callout)
                     .padding(.top, 2)
-                    Text("Menu names can change slightly. If you do not see one, look for the page that lists API tokens.")
+                    Text("API tokens are not available on Fastmail’s Basic plans. You can remove a token at any time from the same page, under Manage API tokens.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

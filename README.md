@@ -131,17 +131,21 @@ after:2026-01-01 before:2026-02-01 newer_than:7d older_than:1y
 
 ## Setup
 
-1. **Create a Fastmail API token.** Veery Mail signs in with a token, not your password, and you can revoke the token in Fastmail at any time.
-   1. Sign in to Fastmail in your browser (app.fastmail.com).
-   2. Go to **Settings → Privacy & Security → Integrations**, then open **API tokens**.
-   3. Choose **New API token** and give it a name you will recognize, such as "Veery Mail on my Mac".
-   4. Set the access:
-      - Leave **Read-only** off. Veery Mail needs to archive, delete and send.
-      - Turn on **Mail**, **Email submission** (needed to send) and **Masked Email**.
-   5. Create the token and copy it. Fastmail shows it only once, and it starts with `fmu1-`.
-   6. Keep it handy for step 3 below.
+1. **Create a Fastmail API token.** Veery Mail signs in with a token, not your password, and you can remove the token in Fastmail at any time. API tokens are not available on Fastmail's Basic plans.
+   1. Sign in to Fastmail in your browser and go to [Settings → Privacy & Security](https://app.fastmail.com/settings/security).
+   2. Find **Connected apps & API tokens** and click **Manage API tokens**. Fastmail may ask for your password to verify it's you.
+   3. Click **New API token** and enter a name you will recognize later, such as "Veery Mail on my Mac".
+   4. Under **Type**, choose **JMAP** (not MCP).
+   5. Under **Scopes**, turn on:
+      - **Email**: read, change and delete mail.
+      - **Email submission**: send mail. It needs **Email** turned on too.
+      - **Masked Email**: for the Masked Email manager.
 
-   Menu and option names can change slightly. If you do not see one, look for the page that lists API tokens. Fastmail's own guide is [here](https://www.fastmail.help/hc/en-us/articles/5254602856719). To stop Veery Mail from having access later, delete the token on the same page.
+      Leave **Read-only access** off, because Veery Mail archives, deletes and sends.
+   6. Click **Generate API token** and copy the token. Fastmail shows it only once, so copy it before you click **Done**. It starts with `fmu1-`.
+   7. Keep it handy for step 3 below.
+
+   Fastmail's own guide is [here](https://www.fastmail.help/hc/en-us/articles/5254602856719). To remove Veery Mail's access later, go back to **Manage API tokens**, click the token, and choose **Remove access**.
 2. Build and run:
 
    ```bash
