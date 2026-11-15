@@ -16,6 +16,8 @@ struct MessageWebView: NSViewRepresentable {
     let inlineParts: [String: (blobId: String, type: String)]
     let client: JMAPClient?
     @Binding var height: CGFloat
+    /// Called instead of rendering when HTML can't be shown safely (the blocking rule isn't available).
+    var onUnsafe: () -> Void = {}
 
     /// One shared, memory-only store: no cookies or cache written to disk.
     @MainActor private static let dataStore = WKWebsiteDataStore.nonPersistent()
@@ -40,24 +42,36 @@ struct MessageWebView: NSViewRepresentable {
         let key = "\(html.hashValue)-\(allowRemote)-\(blend)-\(palette.textHex)"
         guard c.loadedKey != key else { return }
         c.loadedKey = key
-        let document = Self.wrap(html, blend: blend, palette: palette)
+        // A newer render always wins: stop whatever is loading and drop the old rules first.
+        let ticket = c.ticket.next()
+        view.stopLoading()
+        let controller = view.configuration.userContentController
+        controller.removeAllContentRuleLists()
         view.setValue(!blend, forKey: "drawsBackground")   // transparent page when blending
         view.pageZoom = 1
         c.fittedWidth = false
+        let allowRemote = allowRemote
+        let document = HTMLRendering.document(body: html, allowRemote: allowRemote, cidScheme: CIDSchemeHandler.scheme,
+                                              css: Self.css(blend: blend, palette: palette),
+                                              darkScheme: blend && palette.isDark)
+        let onUnsafe = onUnsafe
         Task { @MainActor in
-            let controller = view.configuration.userContentController
-            controller.removeAllContentRuleLists()
-            if !allowRemote, let rules = await RemoteContentBlocker.rules() {
-                controller.add(rules)
+            let rules = allowRemote ? nil : await RemoteContentBlocker.rules()
+            // The message, the setting or the view may have changed while the rule compiled.
+            guard c.ticket.isCurrent(ticket) else { return }
+            switch HTMLRendering.decide(allowRemote: allowRemote, blockingRuleAvailable: rules != nil) {
+            case .plainTextFallback:
+                onUnsafe()
+            case .html(let remote):
+                if !remote, let rules { controller.add(rules) }
+                view.loadHTMLString(document, baseURL: nil)
             }
-            view.loadHTMLString(document, baseURL: nil)
         }
     }
 
-    static func wrap(_ html: String, blend: Bool, palette: ReaderPalette) -> String {
-        let rewritten = html.replacingOccurrences(of: "cid:", with: "\(CIDSchemeHandler.scheme):",
-                                                  options: .caseInsensitive)
-        // Blending forces every text color so nothing ends up unreadable on the sheet.
+    /// App styles for the wrapper page. Blending forces every text color so nothing ends up
+    /// unreadable on the sheet.
+    static func css(blend: Bool, palette: ReaderPalette) -> String {
         let colors = blend
             ? """
               html,body{background:transparent;color:\(palette.textHex);}
@@ -71,9 +85,6 @@ struct MessageWebView: NSViewRepresentable {
               blockquote{border-left:3px solid #ccd;color:#444;}
               """
         return """
-        <!doctype html><html><head><meta charset="utf-8">
-        <meta name="color-scheme" content="\(blend && palette.isDark ? "dark" : "light")">
-        <style>
           html,body{margin:0;padding:0;}
           body{font:15px -apple-system,system-ui,sans-serif;line-height:1.55;word-wrap:break-word;overflow-wrap:anywhere;padding:\(blend ? "0" : "14px 16px");}
           img,video{max-width:100%;height:auto;}
@@ -81,7 +92,6 @@ struct MessageWebView: NSViewRepresentable {
           pre{white-space:pre-wrap;}
           blockquote{margin-left:0;padding-left:10px;}
           \(colors)
-        </style></head><body>\(rewritten)</body></html>
         """
     }
 
@@ -91,6 +101,7 @@ struct MessageWebView: NSViewRepresentable {
         /// Wide fixed-width layouts are zoomed to fit once per load.
         var fittedWidth = false
         let cidHandler = CIDSchemeHandler()
+        let ticket = RenderTicket()
 
         init(height: Binding<CGFloat>) { self.height = height }
 
@@ -193,9 +204,12 @@ enum RemoteContentBlocker {
 
     static func rules() async -> WKContentRuleList? {
         if let compiled { return compiled }
-        let json = #"[{"trigger":{"url-filter":"^https?://.*"},"action":{"type":"block"}}]"#
-        let list = try? await WKContentRuleListStore.default()
-            .compileContentRuleList(forIdentifier: "veerymail-block-remote", encodedContentRuleList: json)
+        let json = #"[{"trigger":{"url-filter":"^(https?|wss?|ftp)://.*"},"action":{"type":"block"}}]"#
+        // Blocks all network schemes, including redirects and preconnects; anything the rule list
+        // can't compile means no HTML is rendered (see HTMLRendering.decide).
+        guard !UserDefaults.standard.bool(forKey: "debug.simulateRuleFailure"),
+              let store = WKContentRuleListStore.default() else { return nil }
+        let list = try? await store.compileContentRuleList(forIdentifier: "veerymail-block-remote", encodedContentRuleList: json)
         compiled = list
         return list
     }

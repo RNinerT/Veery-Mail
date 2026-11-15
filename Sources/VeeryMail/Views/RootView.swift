@@ -20,6 +20,7 @@ struct RootView: View {
 
 struct MainView: View {
     @Environment(MailStore.self) private var store
+    @Environment(\.openWindow) private var openWindow
     @State private var columns = NavigationSplitViewVisibility.all
 
     var body: some View {
@@ -83,9 +84,17 @@ struct MainView: View {
                 Button { store.toggleRead() } label: { Label("Read / Unread", systemImage: "envelope.badge") }
                     .help("Toggle Read (U)")
                     .disabled(none)
-                Button { store.trash() } label: { Label("Trash", systemImage: "trash") }
-                    .help("Move to Trash (#)")
+                if store.source == .mailbox(store.mailbox(role: "trash")?.id ?? "-") {
+                    Button { store.requestPermanentDelete() } label: {
+                        Label("Delete Permanently", systemImage: "trash.slash")
+                    }
+                    .help("Delete Permanently… (⌥⌘⌫)")
                     .disabled(none)
+                } else {
+                    Button { store.trash() } label: { Label("Trash", systemImage: "trash") }
+                        .help("Move to Trash (#)")
+                        .disabled(none)
+                }
             }
         }
         .toolbarBackground(Theme.nav, for: .windowToolbar)
@@ -93,8 +102,36 @@ struct MainView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             store.refreshIfStale()
         }
-        .sheet(item: $store.composer) { draft in
-            ComposeView(draft: draft)
+        .onAppear {
+            // Compose windows are separate windows so they can be moved and kept beside the inbox.
+            store.openComposeWindow = { id in openWindow(id: "compose", value: id) }
+            let waiting = store.pendingComposeIds
+            store.pendingComposeIds = []
+            for id in waiting { openWindow(id: "compose", value: id) }
+        }
+        .confirmationDialog(permanentDeleteTitle, isPresented: Binding(
+            get: { store.pendingPermanentDelete != nil },
+            set: { if !$0 { store.pendingPermanentDelete = nil } }),
+            titleVisibility: .visible, presenting: store.pendingPermanentDelete) { pending in
+            if pending.plan.alsoElsewhere.isEmpty {
+                Button("Delete Permanently", role: .destructive) {
+                    store.confirmPermanentDelete(pending, keepFiledCopies: false)
+                }
+            } else {
+                Button("Delete Only the Copies in Trash", role: .destructive) {
+                    store.confirmPermanentDelete(pending, keepFiledCopies: true)
+                }
+                Button("Delete Everywhere", role: .destructive) {
+                    store.confirmPermanentDelete(pending, keepFiledCopies: false)
+                }
+            }
+            Button("Cancel", role: .cancel) { store.pendingPermanentDelete = nil }
+        } message: { pending in
+            Text(permanentDeleteMessage(pending))
+        }
+        .sheet(item: $store.signOutReview) { review in SignOutReviewView(review: review) }
+        .sheet(item: Binding(get: { store.ai.consent }, set: { if $0 == nil { store.ai.consent?.resume(false, false) } })) { request in
+            AIConsentView(request: request)
         }
         .sheet(isPresented: $store.showCommandPalette) {
             CommandPalette()
@@ -102,6 +139,109 @@ struct MainView: View {
         .sheet(isPresented: $store.showMaskedEmail) {
             MaskedEmailView()
         }
+    }
+
+    private var permanentDeleteTitle: String {
+        let n = store.pendingPermanentDelete?.plan.messageIds.count ?? 0
+        return n == 1 ? "Delete 1 message permanently?" : "Delete \(n) messages permanently?"
+    }
+
+    private func permanentDeleteMessage(_ pending: PendingPermanentDelete) -> String {
+        var text = "This can’t be undone."
+        if !pending.plan.alsoElsewhere.isEmpty {
+            let places = pending.otherMailboxNames.isEmpty ? "other mailboxes" : pending.otherMailboxNames.joined(separator: ", ")
+            text += " \(pending.plan.alsoElsewhere.count) of these messages are also filed in \(places)."
+        }
+        return text
+    }
+}
+
+/// Before signing out: what happens to unsent mail, snoozed conversations and open drafts.
+struct SignOutReviewView: View {
+    @Environment(MailStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let review: SignOutReview
+    @State private var sendUnsent = false
+    @State private var returnSnoozed = true
+    @State private var working = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Sign Out of Fastmail?").font(.headline)
+            if review.unsent > 0 {
+                Picker("\(review.unsent) unsent message\(review.unsent == 1 ? "" : "s")", selection: $sendUnsent) {
+                    Text("Keep in Drafts on Fastmail").tag(false)
+                    Text("Send now").tag(true)
+                }
+            }
+            if review.snoozed > 0 {
+                Toggle("Return \(review.snoozed) snoozed conversation\(review.snoozed == 1 ? "" : "s") to their mailboxes now",
+                       isOn: $returnSnoozed)
+                Text("If you leave them, they wake up the next time you sign in to this account on this Mac.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if review.openDrafts > 0 {
+                Text("\(review.openDrafts) open message\(review.openDrafts == 1 ? " is" : "s are") saved to Drafts first.")
+                    .font(.callout)
+            }
+            Text("Signing out removes this account’s token and cached mail from this Mac.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                if working { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("Cancel") { store.signOutReview = nil }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(working)
+                Button("Sign Out") {
+                    working = true
+                    Task {
+                        await store.performSignOut(sendUnsent: sendUnsent, returnSnoozed: returnSnoozed)
+                        working = false
+                        dismiss()
+                    }
+                }
+                .primaryButton()
+                .disabled(working)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+    }
+}
+
+/// First use of an AI action: shows exactly what will be sent and where.
+struct AIConsentView: View {
+    let request: AIConsentRequest
+    @State private var remember = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("\(request.action.title) with \(request.providerName)?").font(.headline)
+            Text("Veery Mail will send the text below to \(request.providerName) (model \(request.model.isEmpty ? "default" : request.model)). "
+                 + "Nothing else is sent, and nothing is sent until you click Send. Estimated cost: \(request.estimatedCost).")
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            ScrollView {
+                Text(request.preview)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            }
+            .frame(height: 220)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            Toggle("Don’t ask again for this action", isOn: $remember)
+            HStack {
+                Spacer()
+                Button("Cancel") { request.resume(false, false) }
+                    .keyboardShortcut(.cancelAction)
+                Button("Send") { request.resume(true, remember) }
+                    .primaryButton()
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 520)
     }
 }
 
@@ -130,34 +270,25 @@ struct CommandBarButton: View {
     }
 }
 
-/// Undo-send countdown and action toasts. Solid surfaces, so they read the same with Reduce Transparency.
+/// The outbox (undo window, scheduled, sending, problems) and action toasts.
+/// Solid surfaces, so they read the same with Reduce Transparency.
 struct StatusOverlay: View {
     @Environment(MailStore.self) private var store
 
     var body: some View {
         VStack(spacing: Theme.Space.s) {
-            if let pending = store.pendingSend {
-                HStack(spacing: Theme.Space.m) {
-                    ProgressView().controlSize(.small)
-                    TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                        let left = max(0, Int(pending.deadline.timeIntervalSince(ctx.date).rounded(.up)))
-                        Text(pending.sendAt == nil ? "Sending in \(left)s…" : "Scheduling in \(left)s…")
-                            .monospacedDigit()
-                    }
-                    Button("Undo") { store.undoSend() }
-                        .keyboardShortcut("z", modifiers: .command)
-                }
-                .toastStyle()
+            ForEach(store.outbox.items) { item in
+                OutboxRow(item: item).toastStyle()
             }
             if let toast = store.toast {
                 HStack(spacing: Theme.Space.m) {
                     Text(toast.message).lineLimit(2)
-                    if let undo = toast.undo {
-                        Button("Undo") {
-                            undo()
+                    if let title = toast.actionTitle, let action = toast.action {
+                        Button(title) {
+                            action()
                             store.toast = nil
                         }
-                        .keyboardShortcut("z", modifiers: .command)
+                        .keyboardShortcut(title == "Undo" ? KeyboardShortcut("z", modifiers: .command) : nil)
                     }
                 }
                 .toastStyle()
@@ -167,7 +298,65 @@ struct StatusOverlay: View {
         .padding(.bottom, Theme.Space.l)
         .padding(.horizontal, Theme.Space.m)
         .animation(.snappy(duration: 0.2), value: store.toast?.id)
-        .animation(.snappy(duration: 0.2), value: store.pendingSend?.id)
+        .animation(.snappy(duration: 0.2), value: store.outbox.items.map(\.id))
+    }
+}
+
+/// One message in the outbox, with the actions that make sense for its state.
+struct OutboxRow: View {
+    @Environment(MailStore.self) private var store
+    let item: OutboxItem
+
+    var body: some View {
+        HStack(spacing: Theme.Space.m) {
+            switch item.state {
+            case .queued(let until):
+                ProgressView().controlSize(.small)
+                TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                    let left = max(0, Int(until.timeIntervalSince(ctx.date).rounded(.up)))
+                    Text(item.isScheduled ? "Scheduling “\(subject)” in \(left)s…" : "Sending “\(subject)” in \(left)s…")
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+                Button("Undo") { store.takeBack(item.id) }
+                    .keyboardShortcut("z", modifiers: .command)
+                Button("Send Now") { store.outbox.sendNow(item.id) }
+            case .held:
+                Image(systemName: "tray.and.arrow.up").accessibilityHidden(true)
+                Text("“\(subject)” wasn’t sent").lineLimit(1)
+                Button("Send Now") { store.outbox.sendNow(item.id) }
+                Button("Edit") { store.takeBack(item.id) }
+            case .submitting:
+                ProgressView().controlSize(.small)
+                Text(item.isScheduled ? "Scheduling “\(subject)”…" : "Sending “\(subject)”…").lineLimit(1)
+            case .unknown(let reason):
+                Image(systemName: "questionmark.circle").foregroundStyle(.orange).accessibilityHidden(true)
+                Text("Not sure “\(subject)” was sent. \(reason)").lineLimit(2)
+                Button("Check Again") { store.outbox.recheck(item.id) }
+                Menu("Decide") {
+                    Button("It Was Sent") { _ = store.outbox.resolveUnknown(item.id, .markAsSent) }
+                    Button("Send Again") { _ = store.outbox.resolveUnknown(item.id, .retryAnyway) }
+                    Button("Keep as Draft") {
+                        if let back = store.outbox.resolveUnknown(item.id, .keepAsDraft) { store.reopen(back) }
+                    }
+                }
+                .fixedSize()
+            case .failed(let reason):
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).accessibilityHidden(true)
+                Text("“\(subject)” wasn’t sent: \(reason)").lineLimit(2)
+                Button("Retry") { store.outbox.retry(item.id) }
+                Button("Edit") { store.takeBack(item.id) }
+            case .sentWithProblem(let problem):
+                Image(systemName: "checkmark.circle").foregroundStyle(.green).accessibilityHidden(true)
+                Text("Sent. \(problem)").lineLimit(2)
+                Button("OK") { store.outbox.dismiss(item.id) }
+            }
+        }
+    }
+
+    private var subject: String {
+        let s = item.message.subject.trimmingCharacters(in: .whitespaces)
+        return s.isEmpty ? "(no subject)" : String(s.prefix(40))
     }
 }
 
@@ -334,12 +523,13 @@ struct MailboxNode: View {
     @Binding var collapsed: Set<String>
     /// The busiest top-level folder's unread count; 0 hides the intensity bar (Favorites, system mailboxes).
     var peak = 0
+    @State private var dropTargeted = false
 
     var body: some View {
         let kids = tree.children(of: mailbox.id)
         let isExpanded = !collapsed.contains(mailbox.id)
         let hidden = kids.isEmpty || isExpanded ? 0 : tree.descendantUnread(of: mailbox.id)
-        SidebarRow(title: mailbox.name, icon: mailbox.systemImage,
+        SidebarRow(isDropTarget: dropTargeted,title: mailbox.name, icon: mailbox.systemImage,
                    count: MailboxTree.badgeCount(mailbox) + hidden,
                    countIncludesChildren: hidden > 0,
                    intensity: peak > 0 ? Double(MailboxTree.badgeCount(mailbox) + hidden) / Double(peak) : 0,
@@ -353,9 +543,9 @@ struct MailboxNode: View {
             .dropDestination(for: String.self) { ids, _ in
                 let rows = store.messages.filter { ids.contains($0.id) }
                 guard !rows.isEmpty else { return false }
-                store.move(rows, to: mailbox.id, label: "Moved to \(mailbox.name)")
+                store.move(rows, to: mailbox.id, verb: "moved to \(mailbox.name)")
                 return true
-            }
+            } isTargeted: { dropTargeted = $0 }
         if isExpanded {
             ForEach(kids) { child in
                 MailboxNode(mailbox: child, tree: tree, depth: depth + 1, collapsed: $collapsed, peak: peak)
@@ -365,6 +555,8 @@ struct MailboxNode: View {
 }
 
 struct SidebarRow: View {
+    /// Highlighted while mail is dragged over it, so it's clear where it will land.
+    var isDropTarget = false
     let title: String
     let icon: String
     let count: Int
@@ -435,11 +627,16 @@ struct SidebarRow: View {
             }
         }
         .background(RoundedRectangle(cornerRadius: 6)
-            .fill(isSelected ? Theme.selection : (hovering ? Theme.hover : Color.clear)))
+            .fill(isDropTarget ? Theme.accent.opacity(0.35) : (isSelected ? Theme.selection : (hovering ? Theme.hover : Color.clear))))
+        .overlay(RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(Theme.accent, lineWidth: isDropTarget ? 2 : 0))
+        .scaleEffect(isDropTarget ? 1.02 : 1)
+        .animation(.snappy(duration: 0.12), value: isDropTarget)
         .onHover { hovering = $0 }
         .help(count > 0 && countIncludesChildren ? "\(title) — count includes subfolders" : title)   // full name when truncated
         .accessibilityElement(children: .contain)
         .accessibilityLabel(count > 0 ? "\(title), \(count)" : title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityHint(isDropTarget ? "Drop to move here" : "")
     }
 }

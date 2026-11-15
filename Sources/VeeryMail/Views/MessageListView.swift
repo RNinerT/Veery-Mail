@@ -161,7 +161,6 @@ struct InboxListView: View {
         .onKeyPress(phases: [.down, .repeat], action: handleKey)
         .onAppear { focused = true }
         // Give the keyboard back to the list when a sheet closes.
-        .onChange(of: store.composer?.id) { _, new in if new == nil { focused = true } }
         .onChange(of: store.showCommandPalette) { _, showing in if !showing { focused = true } }
         .onChange(of: store.showMaskedEmail) { _, showing in if !showing { focused = true } }
     }
@@ -340,6 +339,7 @@ struct RowContextMenu: View {
         Divider()
         Button("Archive") { store.archive(rows) }
         Button("Move to Trash") { store.trash(rows) }
+        Button("Delete Permanently…") { store.requestPermanentDelete(rows) }
         Button("Mark as Spam") { store.markSpam(rows) }
         Divider()
         let anyUnread = rows.contains { $0.isUnread }
@@ -352,7 +352,7 @@ struct RowContextMenu: View {
         Menu("Move To") {
             ForEach(store.mailboxTree, id: \.mailbox.id) { item in
                 Button(String(repeating: "  ", count: item.depth) + item.mailbox.name) {
-                    store.move(rows, to: item.mailbox.id, label: "Moved to \(item.mailbox.name)")
+                    store.move(rows, to: item.mailbox.id, verb: "moved to \(item.mailbox.name)")
                 }
             }
         }

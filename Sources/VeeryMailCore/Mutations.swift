@@ -70,12 +70,13 @@ public enum MailMutation {
         patch.mapValues { $0 ? true as Any : NSNull() as Any }
     }
 
-    /// "Archived 3 of 5 conversations. 2 couldn't be changed." and similar.
+    /// "3 conversations archived", "2 of 3 conversations archived. 1 couldn’t be changed." and similar.
+    /// `verb` is a past participle phrase: "archived", "moved to Trash".
     public static func summary(verb: String, confirmedThreads: Int, totalThreads: Int) -> String {
         let noun = totalThreads == 1 ? "conversation" : "conversations"
-        if confirmedThreads == totalThreads { return "\(verb) \(totalThreads == 1 ? "conversation" : "\(totalThreads) \(noun)")" }
+        if confirmedThreads == totalThreads { return "\(totalThreads) \(noun) \(verb)" }
         if confirmedThreads == 0 { return "Couldn’t change \(totalThreads == 1 ? "the conversation" : "these \(totalThreads) \(noun)")" }
-        return "\(verb) \(confirmedThreads) of \(totalThreads) \(noun). \(totalThreads - confirmedThreads) couldn’t be changed."
+        return "\(confirmedThreads) of \(totalThreads) \(noun) \(verb). \(totalThreads - confirmedThreads) couldn’t be changed."
     }
 }
 

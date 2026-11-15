@@ -1,5 +1,24 @@
+import CryptoKit
 import Foundation
 import Security
+
+/// Per-account folders under Application Support. The folder name is a hash of the account
+/// identity, so one account's cached mail is never shown for another.
+public enum AccountStorage {
+    public static var root: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Veery Mail", isDirectory: true)
+    }
+
+    public static func namespace(for accountKey: String) -> String {
+        "account-" + SHA256.hash(data: Data(accountKey.utf8)).prefix(10).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Durable records (outbox, snoozes) that must survive clearing the cache.
+    public static func recordsDirectory(for accountKey: String) -> URL {
+        root.appendingPathComponent(namespace(for: accountKey) + "-records", isDirectory: true)
+    }
+}
 
 /// Tiny on-disk cache so the app paints the last-known mailbox list and
 /// message headers instantly at launch, before the network answers.
@@ -9,8 +28,7 @@ public final class DiskCache: @unchecked Sendable {
     private let queue = DispatchQueue(label: "veerymail.cache", qos: .utility)
 
     public init(namespace: String) {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        dir = base.appendingPathComponent("Veery Mail/\(namespace)", isDirectory: true)
+        dir = AccountStorage.root.appendingPathComponent(namespace, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
 
@@ -45,8 +63,34 @@ public final class DiskCache: @unchecked Sendable {
     }
 }
 
-/// API token storage in the login Keychain.
+/// Secrets in the login Keychain: the developer API token, OAuth tokens, AI provider keys.
 public enum Keychain {
+    public static func save(data: Data, account: String) throws {
+        delete(account: account)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecValueData as String: data,
+        ]
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+    }
+
+    public static func data(account: String) -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
+        return item as? Data
+    }
+
     private static let service = "app.veerymail.fastmail"
 
     public static func save(token: String, account: String = "default") throws {
@@ -129,4 +173,17 @@ public enum SnoozePresets {
             SnoozeOption(name: "Next Week", date: monday),
         ]
     }
+}
+
+/// OAuth tokens in the Keychain (one device-only item).
+public struct KeychainTokenStore: TokenStore {
+    public static let account = "oauth.fastmail"
+    public init() {}
+    public func load() -> OAuthTokens? {
+        Keychain.data(account: Self.account).flatMap { try? JSONDecoder().decode(OAuthTokens.self, from: $0) }
+    }
+    public func save(_ tokens: OAuthTokens) throws {
+        try Keychain.save(data: JSONEncoder().encode(tokens), account: Self.account)
+    }
+    public func clear() { Keychain.delete(account: Self.account) }
 }

@@ -27,14 +27,21 @@ struct CommandPalette: View {
             Command(title: "Forward", icon: "arrowshape.turn.up.right", shortcut: "F") { store.forward() },
             Command(title: "Archive", icon: "archivebox", shortcut: "E") { store.archive() },
             Command(title: "Move to Trash", icon: "trash", shortcut: "#") { store.trash() },
+            Command(title: "Delete Permanently…", icon: "trash.slash", shortcut: "⌥⌘⌫") { store.requestPermanentDelete() },
             Command(title: "Mark as Spam", icon: "xmark.bin", shortcut: "!") { store.markSpam() },
             Command(title: "Toggle Read", icon: "envelope.open", shortcut: "U") { store.toggleRead() },
             Command(title: "Toggle Flag", icon: "flag", shortcut: "S") { store.toggleFlag() },
-            Command(title: "Masked Email…", icon: "theatermasks", shortcut: "⇧⌘M") { store.showMaskedEmail = true },
             Command(title: "Refresh", icon: "arrow.clockwise", shortcut: "⌥⌘R") { Task { await store.syncNow() } },
             Command(title: "Go to Unread", icon: "envelope.badge", shortcut: "") { store.source = .unread },
             Command(title: "Go to Flagged", icon: "flag", shortcut: "") { store.source = .flagged },
         ]
+        if store.supportsMaskedEmail || store.isDemo {
+            list.append(Command(title: "Masked Email…", icon: "theatermasks", shortcut: "⇧⌘M") { store.showMaskedEmail = true })
+        }
+        if store.ai.isEnabled || store.isDemo {
+            list.append(Command(title: "Summarize with AI", icon: "sparkles", shortcut: "⌥⌘Y") { store.ai.summarize(store.thread) })
+            list.append(Command(title: "Turn Off AI", icon: "sparkles", shortcut: "") { store.ai.setEnabled(false) })
+        }
         for option in SnoozePresets.options() {
             list.append(Command(title: "Snooze: \(option.name)", icon: "clock", shortcut: "") {
                 store.snooze(until: option.date)
@@ -45,7 +52,7 @@ struct CommandPalette: View {
                 store.source = .mailbox(item.mailbox.id)
             })
             list.append(Command(title: "Move to \(item.mailbox.name)", icon: "folder", shortcut: "") {
-                store.move(to: item.mailbox.id, label: "Moved to \(item.mailbox.name)")
+                store.move(to: item.mailbox.id, verb: "moved to \(item.mailbox.name)")
             })
         }
         return list
@@ -248,13 +255,16 @@ struct MaskedEmailView: View {
 struct LoginView: View {
     @Environment(MailStore.self) private var store
     @State private var token = ""
+    @State private var oauth = FastmailSignIn()
+    @State private var showToken = false
+    @AppStorage("contacts.enabled") private var includeContacts = true
 
     private static let steps: [(String, String)] = [
         ("Sign in to Fastmail in your browser and open Settings → Privacy & Security.", "The button below opens that page."),
         ("Find Connected apps & API tokens and click Manage API tokens.", "Fastmail may ask for your password to verify it’s you."),
         ("Click New API token and enter a name.", "Use something you will recognize later, such as “Veery Mail on my Mac”."),
         ("Under Type, choose JMAP.", "Not MCP. Veery Mail talks to Fastmail over JMAP."),
-        ("Under Scopes, turn on Email, Email submission and Masked Email.", "Email submission lets you send, and it needs Email turned on too. Leave Read-only access off, because Veery Mail archives, deletes and sends."),
+        ("Under Scopes, turn on Email, Email submission, Contacts and Masked Email.", "Email submission lets you send, and it needs Email turned on too. Contacts fills in addresses as you type. Leave Read-only access off, because Veery Mail archives, deletes and sends."),
         ("Click Generate API token, then copy the token.", "Fastmail shows it only once, so copy it before you click Done. It starts with “fmu1-”."),
         ("Paste it below and choose Sign In.", "Veery Mail keeps it in your Mac’s Keychain."),
     ]
@@ -268,10 +278,53 @@ struct LoginView: View {
                         .foregroundStyle(Theme.accent)
                         .accessibilityHidden(true)
                     Text("Veery Mail").font(.largeTitle.weight(.bold))
-                    Text("A fast, native client for Fastmail. Sign in with an API token.")
+                    Text("A fast, native Mac app for your Fastmail account.")
+                        .foregroundStyle(.secondary)
+                    Text("Veery Mail is an independent app and isn’t made or endorsed by Fastmail.")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
+                VStack(alignment: .leading, spacing: 10) {
+                    Button {
+                        oauth.start(store: store, includeContacts: includeContacts)
+                    } label: {
+                        Text("Sign in with Fastmail").frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .primaryButton()
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(oauth.isBusy || store.phase == .connecting)
+                    switch oauth.stage {
+                    case .idle:
+                        Text("Opens Fastmail in your browser. You approve access there; Veery Mail never sees your password.")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    case .preparing:
+                        ProgressView("Contacting Fastmail…").controlSize(.small)
+                    case .waitingForBrowser:
+                        HStack {
+                            ProgressView().controlSize(.small)
+                            Text("Finish signing in in your browser, then come back here.")
+                            Spacer()
+                            Button("Cancel") { oauth.cancel() }
+                        }
+                    case .finishing:
+                        ProgressView("Signing in…").controlSize(.small)
+                    case .failed(let message):
+                        Text(message).foregroundStyle(.red).font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let error = store.lastError, !showToken {
+                        Text(error).foregroundStyle(.red).font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Toggle("Use my Fastmail contacts to fill in addresses", isOn: $includeContacts)
+                        .font(.callout)
+                }
+                .frame(width: 460, alignment: .leading)
+
+                DisclosureGroup("Use an API token instead", isExpanded: $showToken) {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("How to create your API token").font(.headline)
                     ForEach(Array(Self.steps.enumerated()), id: \.offset) { index, step in
@@ -326,10 +379,15 @@ struct LoginView: View {
                 }
                 .frame(width: 460)
 
-                Button("Sign In") { store.signIn(token: token) }
-                    .keyboardShortcut(.defaultAction)
-                    .primaryButton()
+                Button("Sign In with Token") { store.signIn(token: token) }
                     .disabled(token.isEmpty || store.phase == .connecting)
+                }
+                .frame(width: 460, alignment: .leading)
+                HStack(spacing: 14) {
+                    Link("Privacy", destination: URL(string: "https://github.com/RNinerT/Veery-Mail/blob/main/docs/PRIVACY.md")!)
+                    Link("Terms", destination: URL(string: "https://github.com/RNinerT/Veery-Mail/blob/main/docs/TERMS.md")!)
+                }
+                .font(.caption)
             }
             .padding(.vertical, 36)
             .frame(maxWidth: .infinity)
@@ -344,10 +402,14 @@ struct SettingsView: View {
         TabView {
             GeneralSettings()
                 .tabItem { Label("General", systemImage: "gearshape") }
+            SignatureSettings()
+                .tabItem { Label("Signatures", systemImage: "signature") }
             MessageListSettings()
                 .tabItem { Label("Message List", systemImage: "list.bullet.rectangle") }
             SummaryCardSettings()
                 .tabItem { Label("Summary Card", systemImage: "rectangle.stack") }
+            AISettings()
+                .tabItem { Label("AI", systemImage: "sparkles") }
         }
     }
 }
@@ -358,6 +420,8 @@ struct GeneralSettings: View {
     @AppStorage("markReadDelay") private var markReadDelay = 0.0
     @AppStorage("loadRemoteContent") private var loadRemote = false
     @AppStorage("notifications") private var notifications = true
+    @AppStorage("notifications.preview") private var notificationPreview = true
+    @AppStorage("contacts.enabled") private var contactsEnabled = true
     @AppStorage("defaultIdentityId") private var defaultIdentityId = ""
     @AppStorage("appearance") private var appearance = "dark"
     @AppStorage("readerDim") private var readerDim = false
@@ -395,12 +459,22 @@ struct GeneralSettings: View {
             }
             Section("Notifications") {
                 Toggle("Notify about new Inbox mail", isOn: $notifications)
+                Toggle("Show sender and subject in notifications", isOn: $notificationPreview)
+                    .disabled(!notifications)
+            }
+            Section("Contacts") {
+                Toggle("Suggest addresses from my Fastmail contacts", isOn: $contactsEnabled)
+                Text("Contacts are read from Fastmail and kept in memory only while Veery Mail is open.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Account") {
                 if let user = store.client?.session?.username {
                     LabeledContent("Signed in as", value: user)
                 }
-                Button("Sign Out", role: .destructive) { store.signOut() }
+                if let method = store.authMethod {
+                    LabeledContent("Signed in with", value: method == .oauth ? "Fastmail sign-in" : "API token")
+                }
+                Button("Sign Out…", role: .destructive) { store.requestSignOut() }
             }
         }
         .formStyle(.grouped)

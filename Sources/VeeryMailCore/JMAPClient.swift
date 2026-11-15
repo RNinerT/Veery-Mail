@@ -906,7 +906,7 @@ public enum ContactCards {
         for card in cards {
             let name = displayName(card["name"] as? [String: Any])
             let emails = (card["emails"] as? [String: Any]) ?? [:]
-            for value in emails.values {
+            for (_, value) in emails.sorted(by: { $0.key < $1.key }) {
                 guard let address = (value as? [String: Any])?["address"] as? String,
                       address.contains("@") else { continue }
                 if seen.insert(address.lowercased()).inserted {
