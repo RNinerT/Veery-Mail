@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-14 is the app's minimum supported macOS (Sonoma, Swift 5.10 toolchain).
+        # macos-latest is the current runner image.
+        os: [macos-14, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Build
+        run: swift build 2>&1 | tee build.log
+
+      - name: Test
+        run: swift test 2>&1 | tee test.log
+
+      - name: Release app bundle (ad-hoc signed)
+        run: ./scripts/build-app.sh 2>&1 | tee bundle.log
+
+      - name: Verify bundle
+        run: |
+          APP="build/Veery Mail.app"
+          plutil -lint "$APP/Contents/Info.plist"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          lipo -archs "$APP/Contents/MacOS/VeeryMail"
+          /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist"
+
+      - name: Strict concurrency check (warnings only)
+        continue-on-error: true
+        run: |
+          swift build -Xswiftc -strict-concurrency=complete 2>&1 | tee concurrency.log
+          echo "Concurrency warnings: $(grep -c 'warning:' concurrency.log || true)"
+
+      - name: Warning summary
+        if: always()
+        run: |
+          for f in build.log test.log concurrency.log; do
+            [ -f "$f" ] || continue
+            echo "== $f =="
+            grep -E "(warning|error):" "$f" | sed 's#^.*/Sources/#Sources/#' | sort -u | head -150 || true
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-${{ matrix.os }}
+          path: "*.log"
+          retention-days: 14
