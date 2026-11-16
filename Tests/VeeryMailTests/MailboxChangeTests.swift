@@ -203,3 +203,20 @@ final class ContactsTests: XCTestCase {
         XCTAssertEqual(contacts.last?.name, "Sam Lee")
     }
 }
+
+final class EmojiCatalogTests: XCTestCase {
+    /// Regression: a reversed range crashed the app when the emoji picker opened.
+    func testRangesAreValid() {
+        for (name, _, ranges) in EmojiCatalog.ranges {
+            for range in ranges { XCTAssertLessThanOrEqual(range.lowerBound, range.upperBound, name) }
+        }
+    }
+
+    func testCatalogBuildsWithUniqueEmoji() {
+        XCTAssertGreaterThan(EmojiCatalog.categories.count, 5)
+        XCTAssertGreaterThan(EmojiCatalog.all.count, 1_000)
+        XCTAssertEqual(Set(EmojiCatalog.all.map(\.character)).count, EmojiCatalog.all.count, "picker items need unique ids")
+        XCTAssertTrue(EmojiCatalog.categories.allSatisfy { !$0.emoji.isEmpty })
+        XCTAssertTrue(EmojiCatalog.all.contains { $0.character == "😀" })
+    }
+}
