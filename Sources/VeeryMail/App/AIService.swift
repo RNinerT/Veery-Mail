@@ -4,12 +4,13 @@ import VeeryMailCore
 
 /// The AI actions the app offers. Each has its own first-use confirmation.
 enum AIAction: String, CaseIterable, Identifiable {
-    case summarize, draftReply, rewrite
+    case summarize, draftReply, compose, rewrite
     var id: String { rawValue }
     var title: String {
         switch self {
         case .summarize: return "Summarize conversation"
         case .draftReply: return "Draft a reply"
+        case .compose: return "Write a message"
         case .rewrite: return "Rewrite text"
         }
     }

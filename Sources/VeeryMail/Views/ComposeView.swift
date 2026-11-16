@@ -181,8 +181,13 @@ struct ComposeView: View {
                     .disabled(aiTask != nil)
                     .keyboardShortcut("d", modifiers: [.command, .option])
             } else {
-                Text("AI").font(.caption).foregroundStyle(.secondary)
-                Spacer()
+                TextField("Tell AI what to write, e.g. “invite the team to lunch Friday at noon”", text: $aiInstruction)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { writeWithAI() }
+                Button("Write") { writeWithAI() }
+                    .disabled(aiTask != nil)
+                    .keyboardShortcut("d", modifiers: [.command, .option])
+                    .help("Writes the message from your instruction, and a subject if there isn’t one (⌥⌘D)")
             }
             Menu("Rewrite") {
                 ForEach(AIPromptBuilder.RewriteStyle.allCases, id: \.self) { style in
@@ -200,6 +205,41 @@ struct ComposeView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(Theme.card.opacity(0.4))
+    }
+
+    /// New message: writes the body (and a subject when empty) from the instruction. The result is
+    /// collected first so a suggested subject line can go into the Subject field, then inserted.
+    private func writeWithAI() {
+        let instruction = aiInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instruction.isEmpty, aiTask == nil else { return }
+        let current = draft.wrappedValue
+        let recipients = EmailAddress.parseList(current.to) + EmailAddress.parseList(current.cc) + EmailAddress.parseList(current.bcc)
+        let identity = store.identities.first { $0.id == current.identityId } ?? store.defaultIdentity
+        problem = nil
+        aiTask = Task {
+            defer { aiTask = nil }
+            do {
+                var examples: [String] = []
+                if let client = store.client { examples = await styleExamples(client) }
+                let prompt = try AIPromptBuilder.compose(instruction: instruction, recipients: recipients, subject: current.subject,
+                                                         myName: identity?.name.isEmpty == false ? identity!.name : "me",
+                                                         styleExamples: examples, exclusions: store.ai.exclusions)
+                var result = ""
+                try await store.ai.run(.compose, prompt: prompt) { result += $0 }
+                try Task.checkCancellation()
+                let split = AIPromptBuilder.splitSubject(result)
+                if let subject = split.subject, draft.wrappedValue.subject.trimmingCharacters(in: .whitespaces).isEmpty {
+                    draft.wrappedValue.subject = subject
+                }
+                guard !split.body.isEmpty else { return }
+                controller.textView?.setSelectedRange(NSRange(location: 0, length: 0))
+                controller.insert(split.body + "\n")
+                aiInstruction = ""
+            } catch is CancellationError {
+            } catch {
+                problem = error.localizedDescription
+            }
+        }
     }
 
     private func draftWithAI() {
@@ -520,6 +560,11 @@ struct FormattingBar: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
+        .onAppear {
+            if UserDefaults.standard.bool(forKey: "uitest.openEmoji") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { showEmoji = true }
+            }
+        }
     }
 
     static let colors: [(String, NSColor)] = [

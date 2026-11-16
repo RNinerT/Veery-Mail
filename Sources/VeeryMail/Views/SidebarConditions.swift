@@ -49,6 +49,7 @@ struct ConditionsCard: View {
     @Environment(MailStore.self) private var store
     @AppStorage("notifications") private var notifications = true
     @AppStorage(CardStat.storageKey) private var statsRaw = ""
+    @AppStorage("card.showArrivalsGraph") private var showGraph = true
 
     var body: some View {
         let unread = store.mailbox(role: "inbox")?.unreadThreads ?? 0
@@ -92,7 +93,9 @@ struct ConditionsCard: View {
                 .accessibilityLabel("Inbox: \(unread) unread, \(c.condition.word). \(c.summary)")
                 .accessibilityHint("Shows the Inbox")
 
-                ArrivalsGraph(hourly: c.hourly, now: context.date)
+                if showGraph {
+                    ArrivalsGraph(hourly: c.hourly, now: context.date)
+                }
 
                 // Optional stats chosen in Settings → Summary Card. Never more than three.
                 let stats = CardStat.parse(statsRaw)

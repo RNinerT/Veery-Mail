@@ -55,6 +55,26 @@ jobs:
           lipo -archs "$APP/Contents/MacOS/VeeryMail"
           /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist"
 
+      - name: Launch smoke test (demo mode, compose window, emoji picker)
+        timeout-minutes: 3
+        run: |
+          APP="build/Veery Mail.app"
+          rm -f ~/Library/Logs/DiagnosticReports/VeeryMail* 2>/dev/null || true
+          open "$APP" --args -demo YES -uitest.openEmoji YES
+          sleep 15
+          screencapture -x smoke.png 2>/dev/null || true
+          if pgrep -x VeeryMail >/dev/null; then
+            echo "App still running after opening compose and the emoji picker."
+            pkill -x VeeryMail || true
+          else
+            echo "::error::Veery Mail exited during the smoke test"
+            for f in ~/Library/Logs/DiagnosticReports/VeeryMail*; do
+              [ -f "$f" ] || continue
+              echo "== $f"; head -c 60000 "$f"
+            done
+            exit 1
+          fi
+
       - name: Strict concurrency check (warnings only)
         continue-on-error: true
         run: |
@@ -75,5 +95,7 @@ jobs:
         if: always()
         with:
           name: logs-${{ matrix.os }}
-          path: "*.log"
+          path: |
+            *.log
+            smoke.png
           retention-days: 14

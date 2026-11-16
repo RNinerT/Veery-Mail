@@ -441,6 +441,55 @@ final class AITests: XCTestCase {
         XCTAssertNil(body["temperature"])
     }
 
+    func testComposePromptSendsOnlyNamesAndInstruction() throws {
+        let to = [EmailAddress(name: "Imani Okafor", email: "imani@fernhill.example"), EmailAddress(email: "sam@example.com")]
+        let prompt = try AIPromptBuilder.compose(instruction: "invite them to lunch <b>Friday</b>", recipients: to, subject: "",
+                                                 myName: "Chris", styleExamples: [], exclusions: AIExclusions())
+        XCTAssertTrue(prompt.user.contains("Imani Okafor, sam"))
+        XCTAssertFalse(prompt.user.contains("@"), "addresses are not sent")
+        XCTAssertFalse(prompt.user.contains("<b>"), "instruction is escaped")
+        XCTAssertTrue(prompt.system.contains("Subject: "), "asks for a subject when there is none")
+        let withSubject = try AIPromptBuilder.compose(instruction: "x", recipients: [], subject: "Lunch", myName: "Chris",
+                                                      styleExamples: [], exclusions: AIExclusions())
+        XCTAssertTrue(withSubject.system.contains("no subject line"))
+        XCTAssertThrowsError(try AIPromptBuilder.compose(instruction: "x", recipients: to, subject: "", myName: "Chris",
+                                                         styleExamples: [], exclusions: AIExclusions(senders: ["@fernhill.example"])))
+        XCTAssertThrowsError(try AIPromptBuilder.compose(instruction: "  ", recipients: [], subject: "", myName: "Chris",
+                                                         styleExamples: [], exclusions: AIExclusions()))
+    }
+
+    func testSplitSubject() {
+        let split = AIPromptBuilder.splitSubject("Subject: Lunch on Friday?\n\nHi Imani,\nAre you free?")
+        XCTAssertEqual(split.subject, "Lunch on Friday?")
+        XCTAssertEqual(split.body, "Hi Imani,\nAre you free?")
+        XCTAssertNil(AIPromptBuilder.splitSubject("Hi Imani").subject)
+    }
+
+    func testProviderErrorsKeepTheProviderMessage() {
+        let quota = #"{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","code":"insufficient_quota"}}"#
+        XCTAssertThrowsError(try AIHTTP.map(429, body: quota, provider: "OpenAI")) { error in
+            guard case .outOfCredit(let provider, let code, let detail) = error as? AIError else { return XCTFail("\(error)") }
+            XCTAssertEqual(provider, "OpenAI"); XCTAssertEqual(code, "insufficient_quota")
+            XCTAssertTrue(detail.contains("exceeded your current quota"))
+            XCTAssertTrue(error.localizedDescription.contains("exceeded your current quota"))
+        }
+        let rate = #"{"error":{"message":"Rate limit reached for requests per min.","type":"requests","code":"rate_limit_exceeded"}}"#
+        XCTAssertThrowsError(try AIHTTP.map(429, body: rate, provider: "OpenAI")) { error in
+            guard case .rateLimited = error as? AIError else { return XCTFail("a rate limit is not a billing problem") }
+        }
+        let model = #"{"error":{"message":"The model `gpt-x` does not exist or you do not have access to it.","code":"model_not_found"}}"#
+        XCTAssertThrowsError(try AIHTTP.map(404, body: model, provider: "OpenAI")) { error in
+            guard case .modelUnavailable = error as? AIError else { return XCTFail("\(error)") }
+        }
+        XCTAssertThrowsError(try AIHTTP.map(403, body: #"{"error":{"message":"Forbidden"}}"#, provider: "OpenAI")) { error in
+            guard case .badKey = error as? AIError else { return XCTFail("\(error)") }
+        }
+        let anthropic = #"{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}"#
+        XCTAssertThrowsError(try AIHTTP.map(400, body: anthropic, provider: "Anthropic")) { error in
+            guard case .outOfCredit = error as? AIError else { return XCTFail("\(error)") }
+        }
+    }
+
     func testDemoProviderMakesNoRequests() async throws {
         var text = ""
         for try await event in DemoAIProvider().stream(system: "Summarize", user: "x", maxTokens: 10) {

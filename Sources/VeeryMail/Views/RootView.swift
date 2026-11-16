@@ -108,6 +108,10 @@ struct MainView: View {
             let waiting = store.pendingComposeIds
             store.pendingComposeIds = []
             for id in waiting { openWindow(id: "compose", value: id) }
+            // Automated UI check (CI only): opens a compose window so the emoji picker can be exercised.
+            if UserDefaults.standard.bool(forKey: "uitest.openEmoji") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { store.compose() }
+            }
         }
         .confirmationDialog(permanentDeleteTitle, isPresented: Binding(
             get: { store.pendingPermanentDelete != nil },

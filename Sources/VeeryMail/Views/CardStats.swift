@@ -150,6 +150,7 @@ struct CardStatRow: View {
     let now: Date
     @AppStorage("card.streakTarget") private var streakTarget = 0
     @AppStorage("card.waitingDays") private var waitingDays = 3
+    @AppStorage("card.showArrivalsGraph") private var showGraph = true
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -361,8 +362,10 @@ struct SummaryCardSettings: View {
         Form {
             Section {
                 Toggle("Show the Inbox summary card at the top of the sidebar", isOn: $showCard)
+                Toggle("Show the 24-hour graph of arriving mail", isOn: $showGraph)
+                    .disabled(!showCard)
             } footer: {
-                Text("The card shows your unread count, a one-word summary and a 24-hour graph of arriving mail.")
+                Text("The card shows your unread count, a one-word summary and, if you like, a 24-hour graph of arriving mail.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {

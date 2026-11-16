@@ -74,9 +74,12 @@ public enum AIStreamEvent: Equatable, Sendable {
 
 public enum AIError: LocalizedError, Equatable {
     case missingKey
-    case badKey
-    case outOfCredit
-    case rateLimited
+    case badKey(provider: String, detail: String)
+    /// The provider refused for billing or quota reasons. `detail` is the provider's own message.
+    case outOfCredit(provider: String, code: String?, detail: String)
+    case rateLimited(provider: String, detail: String)
+    /// The key works but this account or project can't use the chosen model.
+    case modelUnavailable(provider: String, detail: String)
     case server(Int, String)
     case overBudget(spent: Double, cap: Double)
     case excluded(String)
@@ -85,15 +88,31 @@ public enum AIError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .missingKey: return "Add an API key in Settings → AI first."
-        case .badKey: return "The provider rejected the API key. Check it in Settings → AI."
-        case .outOfCredit: return "The provider says the account is out of credit."
-        case .rateLimited: return "The provider is rate-limiting requests. Try again in a minute."
+        case .badKey(let provider, let detail):
+            return "\(provider) rejected the API key. Check it in Settings → AI.\(Self.quote(detail))"
+        case .outOfCredit(let provider, let code, let detail):
+            var text = "\(provider) refused the request for billing or quota reasons\(code.map { " (\($0))" } ?? "").\(Self.quote(detail))"
+            if provider == "OpenAI" {
+                text += " Add API credit at platform.openai.com → Settings → Billing (separate from a ChatGPT subscription)."
+            } else if provider == "Anthropic" {
+                text += " Add credit in the Anthropic Console under Billing."
+            }
+            return text
+        case .rateLimited(let provider, let detail):
+            return "\(provider) is rate-limiting requests. Try again in a minute.\(Self.quote(detail))"
+        case .modelUnavailable(let provider, let detail):
+            return "\(provider) won’t let this key use the chosen model. Pick another model in Settings → AI.\(Self.quote(detail))"
         case .server(let code, let body): return "The AI provider returned an error (HTTP \(code)). \(body.prefix(160))"
         case .overBudget(let spent, let cap):
             return String(format: "This month’s AI spending cap is reached ($%.2f of $%.2f). Raise it in Settings → AI.", spent, cap)
         case .excluded(let why): return why
         case .nothingToSend: return "There’s no text to work with."
         }
+    }
+
+    private static func quote(_ detail: String) -> String {
+        let d = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        return d.isEmpty ? "" : " Provider message: “\(d)”"
     }
 }
 
@@ -142,7 +161,7 @@ public struct AnthropicProvider: AIProvider {
             let task = Task {
                 do {
                     let (bytes, response) = try await transport.bytes(for: request(system: system, user: user, maxTokens: maxTokens))
-                    try await AIHTTP.check(response, bytes: bytes)
+                    try await AIHTTP.check(response, bytes: bytes, provider: "Anthropic")
                     var parser = AnthropicSSEParser()
                     for try await line in bytes.lines {
                         for event in parser.consume(line) { continuation.yield(event) }
@@ -161,7 +180,7 @@ public struct AnthropicProvider: AIProvider {
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("2026-10-21", forHTTPHeaderField: "anthropic-version")
         let (data, response) = try await transport.data(for: req)
-        try AIHTTP.check(response, data: data)
+        try AIHTTP.check(response, data: data, provider: "Anthropic")
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         return ((json?["data"] as? [[String: Any]]) ?? []).compactMap { $0["id"] as? String }
     }
@@ -177,6 +196,8 @@ public struct OpenAICompatibleProvider: AIProvider {
     public init(apiKey: String?, model: String, baseURL: URL, transport: HTTPTransport = URLSessionTransport.standard()) {
         self.apiKey = apiKey; self.model = model; self.baseURL = baseURL; self.transport = transport
     }
+
+    var providerName: String { baseURL.host == "api.openai.com" ? "OpenAI" : "The local AI server" }
 
     func request(system: String, user: String, maxTokens: Int) throws -> URLRequest {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
@@ -200,7 +221,7 @@ public struct OpenAICompatibleProvider: AIProvider {
             let task = Task {
                 do {
                     let (bytes, response) = try await transport.bytes(for: request(system: system, user: user, maxTokens: maxTokens))
-                    try await AIHTTP.check(response, bytes: bytes)
+                    try await AIHTTP.check(response, bytes: bytes, provider: providerName)
                     for try await line in bytes.lines {
                         for event in OpenAISSEParser.consume(line) { continuation.yield(event) }
                     }
@@ -217,7 +238,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/models"))
         if let apiKey, !apiKey.isEmpty { req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         let (data, response) = try await transport.data(for: req)
-        try AIHTTP.check(response, data: data)
+        try AIHTTP.check(response, data: data, provider: providerName)
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         return ((json?["data"] as? [[String: Any]]) ?? []).compactMap { $0["id"] as? String }.sorted()
     }
@@ -248,28 +269,46 @@ public struct DemoAIProvider: AIProvider {
 }
 
 enum AIHTTP {
-    static func check(_ response: URLResponse, data: Data) throws {
+    static func check(_ response: URLResponse, data: Data, provider: String) throws {
         guard let http = response as? HTTPURLResponse else { return }
-        try map(http.statusCode, body: String(data: data, encoding: .utf8) ?? "")
+        try map(http.statusCode, body: String(data: data, encoding: .utf8) ?? "", provider: provider)
     }
 
-    static func check(_ response: URLResponse, bytes: URLSession.AsyncBytes) async throws {
+    static func check(_ response: URLResponse, bytes: URLSession.AsyncBytes, provider: String) async throws {
         guard let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) else { return }
         var body = ""
-        for try await line in bytes.lines { body += line; if body.count > 2000 { break } }
-        try map(http.statusCode, body: body)
+        for try await line in bytes.lines { body += line; if body.count > 4000 { break } }
+        try map(http.statusCode, body: body, provider: provider)
     }
 
-    static func map(_ code: Int, body: String) throws {
+    /// The provider's own error, from {"error": {"message", "code", "type"}} (OpenAI and Anthropic both use this shape).
+    static func providerError(_ body: String) -> (message: String, code: String?, type: String?) {
+        guard let data = body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let error = json["error"] as? [String: Any] else {
+            return (String(body.prefix(300)), nil, nil)
+        }
+        return ((error["message"] as? String) ?? "", error["code"] as? String, error["type"] as? String)
+    }
+
+    static func map(_ code: Int, body: String, provider: String) throws {
+        guard !(200..<300).contains(code) else { return }
+        let e = providerError(body)
+        let message = String(e.message.prefix(400))
+        let tags = [e.code, e.type].compactMap { $0?.lowercased() }
+        let lower = message.lowercased()
+        let billing = tags.contains { ["insufficient_quota", "billing_hard_limit_reached", "billing_not_active"].contains($0) }
+            || lower.contains("credit balance") || lower.contains("exceeded your current quota") || lower.contains("billing")
+        if billing || code == 402 {
+            throw AIError.outOfCredit(provider: provider, code: e.code ?? e.type, detail: message)
+        }
+        if code == 403 || code == 404, lower.contains("model") || tags.contains("model_not_found") {
+            throw AIError.modelUnavailable(provider: provider, detail: message)
+        }
         switch code {
-        case 200..<300: return
-        case 401, 403: throw AIError.badKey
-        case 402: throw AIError.outOfCredit
-        case 429: throw body.lowercased().contains("quota") || body.lowercased().contains("credit")
-            ? AIError.outOfCredit : AIError.rateLimited
-        default:
-            if body.lowercased().contains("credit balance") { throw AIError.outOfCredit }
-            throw AIError.server(code, body)
+        case 401, 403: throw AIError.badKey(provider: provider, detail: message)
+        case 429: throw AIError.rateLimited(provider: provider, detail: message)
+        default: throw AIError.server(code, message)
         }
     }
 }
@@ -359,6 +398,17 @@ public struct AIExclusions: Codable, Equatable, Sendable {
         }
         return nil
     }
+
+    /// For a new message: refuses when any recipient is on the "never send" list.
+    public func reason(forRecipients recipients: [EmailAddress]) -> String? {
+        for address in recipients.map({ $0.email.lowercased() }) {
+            let domain = address.split(separator: "@").last.map { "@" + $0 } ?? ""
+            if senders.contains(address) || senders.contains(domain) {
+                return "A recipient of this message is excluded from AI."
+            }
+        }
+        return nil
+    }
 }
 
 public struct AIPrompt: Equatable, Sendable {
@@ -401,6 +451,45 @@ public enum AIPromptBuilder {
             system: "Write the body of a reply email from \(myName) to the latest message in the conversation. Follow the user's instruction, keep it concise, and match the conversation's tone. Return only the reply body: no subject line, no quoted text, no commentary.\n\n" + safety,
             user: user,
             maxTokens: 1_500)
+    }
+
+    /// A new message written from a short instruction. Only recipient names (not addresses), the
+    /// subject if there is one, and the instruction are sent. When there's no subject yet, the
+    /// model is asked to suggest one on the first line ("Subject: …"); see `splitSubject`.
+    public static func compose(instruction: String, recipients: [EmailAddress], subject: String, myName: String,
+                               styleExamples: [String], exclusions: AIExclusions) throws -> AIPrompt {
+        let what = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !what.isEmpty else { throw AIError.nothingToSend }
+        if let reason = exclusions.reason(forRecipients: recipients) { throw AIError.excluded(reason) }
+        var user = ""
+        let names = recipients.map { $0.name?.isEmpty == false ? $0.name! : String($0.email.split(separator: "@").first ?? "") }
+        if !names.isEmpty { user += "Recipients: \(escape(names.joined(separator: ", ")))\n" }
+        let trimmedSubject = subject.trimmingCharacters(in: .whitespaces)
+        if !trimmedSubject.isEmpty { user += "Subject: \(escape(trimmedSubject))\n" }
+        if !styleExamples.isEmpty {
+            user += "\nExamples of how the user writes (match the tone, not the content):\n"
+            for (i, example) in styleExamples.prefix(3).enumerated() {
+                user += "<style_example index=\"\(i + 1)\">\n\(escape(String(example.prefix(1_500))))\n</style_example>\n"
+            }
+        }
+        user += "\nWhat the user wants the email to say:\n<instruction>\n\(escape(what))\n</instruction>"
+        let subjectRule = trimmedSubject.isEmpty
+            ? "Start with one line \"Subject: \" followed by a short subject, then a blank line, then the body."
+            : "Return only the body: no subject line."
+        return AIPrompt(
+            system: "Write a new email from \(myName) that does what the user's instruction asks. Keep it concise and natural, and greet the recipients by first name when they are given. \(subjectRule) No commentary, no placeholders in square brackets, and no signature: the app adds the user's signature.\n\n" + safety,
+            user: user,
+            maxTokens: 1_500)
+    }
+
+    /// Separates a leading "Subject: …" line from a generated email.
+    public static func splitSubject(_ text: String) -> (subject: String?, body: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix("subject:") else { return (nil, trimmed) }
+        let firstBreak = trimmed.firstIndex(of: "\n") ?? trimmed.endIndex
+        let subject = trimmed[trimmed.index(trimmed.startIndex, offsetBy: 8)..<firstBreak].trimmingCharacters(in: .whitespaces)
+        let body = trimmed[firstBreak...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return (subject.isEmpty ? nil : subject, body)
     }
 
     public enum RewriteStyle: String, CaseIterable, Sendable {
