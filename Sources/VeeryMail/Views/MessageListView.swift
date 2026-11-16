@@ -244,6 +244,7 @@ struct InboxRow: View {
     private var fill: Color {
         if isOpen { return Theme.accent.opacity(0.16) }
         if isSelected { return Theme.selection }
+        if row.isUnread && format.showUnreadBackground { return format.unreadBackgroundColor }
         return hovering ? Theme.hover : Color.clear
     }
 

@@ -493,6 +493,11 @@ struct MessageListSettings: View {
         Binding(get: { f.format.unreadDotColor }, set: { f.unreadDotHex = $0.hexString })
     }
 
+    private var unreadBackgroundColor: Binding<Color> {
+        Binding(get: { Color(hex: f.unreadBackgroundHex) ?? Theme.unread },
+                set: { f.unreadBackgroundHex = $0.hexString })
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             preview
@@ -533,6 +538,22 @@ struct MessageListSettings: View {
                         }
                     }
                     .disabled(!f.showUnreadDot)
+                    Toggle("Highlight unread messages", isOn: f.$showUnreadBackground)
+                    LabeledContent("Unread background color") {
+                        HStack {
+                            ColorPicker("Unread background color", selection: unreadBackgroundColor, supportsOpacity: false)
+                                .labelsHidden()
+                            Button("Default") { f.unreadBackgroundHex = "" }
+                                .disabled(f.unreadBackgroundHex.isEmpty)
+                        }
+                    }
+                    .disabled(!f.showUnreadBackground)
+                    HStack {
+                        Text("Unread background intensity")
+                        Slider(value: f.$unreadBackgroundOpacity, in: 0.05...0.5)
+                        Text("\(Int(f.unreadBackgroundOpacity * 100))%").monospacedDigit()
+                    }
+                    .disabled(!f.showUnreadBackground)
                     Toggle("Clean up sender names from mail relays (SimpleLogin)", isOn: f.$cleanSenders)
                 }
                 Section {
@@ -573,6 +594,7 @@ struct MessageListSettings: View {
             ForEach(samples) { row in
                 MessageRow(row: row, format: format)
                     .padding(.horizontal, 12)
+                    .background(row.isUnread && format.showUnreadBackground ? format.unreadBackgroundColor : Color.clear)
                 Divider().padding(.leading, 12)
             }
         }

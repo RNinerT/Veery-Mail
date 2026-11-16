@@ -28,6 +28,12 @@ struct MainView: View {
         NavigationSplitView(columnVisibility: $columns) {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 340)
+                .toolbar {
+                    ToolbarItem(placement: .navigation) {
+                        SettingsLink { Label("Settings", systemImage: "gearshape") }
+                            .help("Settings")
+                    }
+                }
         } content: {
             InboxListView()
                 .overlay(alignment: .bottom) { StatusOverlay() }
