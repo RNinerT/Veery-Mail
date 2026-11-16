@@ -150,7 +150,6 @@ struct CardStatRow: View {
     let now: Date
     @AppStorage("card.streakTarget") private var streakTarget = 0
     @AppStorage("card.waitingDays") private var waitingDays = 3
-    @AppStorage("card.showArrivalsGraph") private var showGraph = true
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -343,6 +342,7 @@ struct SummaryCardSettings: View {
     @AppStorage(CardStat.storageKey) private var statsRaw = ""
     @AppStorage("card.streakTarget") private var streakTarget = 0
     @AppStorage("card.waitingDays") private var waitingDays = 3
+    @AppStorage("card.showArrivalsGraph") private var showGraph = true
 
     private var chosen: [CardStat] { CardStat.parse(statsRaw) }
 
