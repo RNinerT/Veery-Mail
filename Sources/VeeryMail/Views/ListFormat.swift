@@ -209,7 +209,11 @@ struct ListFormat: Equatable {
     var cleanSenders = true
     /// Empty = the theme's default unread color.
     var unreadDotHex = ""
+    var showUnreadBackground = true
+    var unreadBackgroundHex = ""
+    var unreadBackgroundOpacity = 0.18
 
+    var unreadBackgroundColor: Color { (Color(hex: unreadBackgroundHex) ?? Theme.unread).opacity(unreadBackgroundOpacity) }
     var unreadDotColor: Color { Color(hex: unreadDotHex) ?? Theme.unread }
 
     enum Key {
@@ -221,8 +225,11 @@ struct ListFormat: Equatable {
         static let showUnreadDot = "list.showUnreadDot"
         static let cleanSenders = "list.cleanSenders"
         static let unreadDotHex = "list.unreadDotHex"
+        static let showUnreadBackground = "list.showUnreadBackground"
+        static let unreadBackgroundHex = "list.unreadBackgroundHex"
+        static let unreadBackgroundOpacity = "list.unreadBackgroundOpacity"
         static let layout = [previewLines, spacing, dateStyle, firstLine, showAvatars, showUnreadDot,
-                             cleanSenders, unreadDotHex]
+                             cleanSenders, unreadDotHex, showUnreadBackground, unreadBackgroundHex, unreadBackgroundOpacity]
     }
 
     // MARK: Persistence helpers (styles are stored as JSON strings)
@@ -279,12 +286,16 @@ struct ListFormatStorage: DynamicProperty {
     @AppStorage(ListFormat.Key.showUnreadDot) var showUnreadDot = true
     @AppStorage(ListFormat.Key.cleanSenders) var cleanSenders = true
     @AppStorage(ListFormat.Key.unreadDotHex) var unreadDotHex = ""
+    @AppStorage(ListFormat.Key.showUnreadBackground) var showUnreadBackground = true
+    @AppStorage(ListFormat.Key.unreadBackgroundHex) var unreadBackgroundHex = ""
+    @AppStorage(ListFormat.Key.unreadBackgroundOpacity) var unreadBackgroundOpacity = 0.18
 
     var format: ListFormat {
         ListFormat(sender: style(.sender), subject: style(.subject), preview: style(.preview), date: style(.date),
                    previewLines: previewLines, spacing: spacing, dateStyle: dateStyle, firstLine: firstLine,
                    showAvatars: showAvatars, showUnreadDot: showUnreadDot, cleanSenders: cleanSenders,
-                   unreadDotHex: unreadDotHex)
+                   unreadDotHex: unreadDotHex, showUnreadBackground: showUnreadBackground,
+                   unreadBackgroundHex: unreadBackgroundHex, unreadBackgroundOpacity: unreadBackgroundOpacity)
     }
 
     func style(_ element: ListFormat.Element) -> TextStyle {
