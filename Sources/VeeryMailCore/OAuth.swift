@@ -116,7 +116,7 @@ public struct PendingAuthorization: Equatable, Sendable {
 public struct OAuthClientInfo: Sendable {
     public var clientName = "Veery Mail"
     public var softwareId = "0b6d7c2e-5a3f-4e1b-9c8d-2f7a1e4b6c90"
-    public var softwareVersion = "0.1"
+    public var softwareVersion = "0.2.0"
     public var clientURI: String?
     public var policyURI: String?
     public var tosURI: String?
