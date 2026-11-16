@@ -13,6 +13,7 @@ cd "$(dirname "$0")/.."
 
 : "${DEVELOPER_ID:?Set DEVELOPER_ID to your Developer ID Application identity}"
 : "${NOTARY_PROFILE:?Set NOTARY_PROFILE to a notarytool keychain profile}"
+: "${SPARKLE_PUBLIC_ED_KEY:?Set SPARKLE_PUBLIC_ED_KEY to the Sparkle public signing key}"
 
 APP="build/Veery Mail.app"
 ZIP="build/Veery-Mail.zip"
@@ -26,6 +27,25 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/VeeryMail"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+
+FRAMEWORK="$(find .build/artifacts -name Sparkle.framework -type d -print -quit)"
+test -n "$FRAMEWORK" || { echo "Sparkle.framework not found" >&2; exit 1; }
+mkdir -p "$APP/Contents/Frameworks"
+ditto "$FRAMEWORK" "$APP/Contents/Frameworks/Sparkle.framework"
+install_name_tool -add_rpath '@executable_path/../Frameworks' "$APP/Contents/MacOS/VeeryMail"
+PLIST="$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_PUBLIC_ED_KEY" "$PLIST"
+/usr/libexec/PlistBuddy -c 'Add :SUFeedURL string https://github.com/RNinerT/Veery-Mail/releases/latest/download/appcast.xml' "$PLIST"
+/usr/libexec/PlistBuddy -c 'Add :SUEnableAutomaticChecks bool true' "$PLIST"
+/usr/libexec/PlistBuddy -c 'Add :SUAutomaticallyUpdate bool true' "$PLIST"
+/usr/libexec/PlistBuddy -c 'Add :SUVerifyUpdateBeforeExtraction bool true' "$PLIST"
+
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+codesign --force --sign "$DEVELOPER_ID" --options runtime --timestamp "$SPARKLE/Versions/B/XPCServices/Installer.xpc"
+codesign --force --sign "$DEVELOPER_ID" --options runtime --timestamp --preserve-metadata=entitlements "$SPARKLE/Versions/B/XPCServices/Downloader.xpc"
+codesign --force --sign "$DEVELOPER_ID" --options runtime --timestamp "$SPARKLE/Versions/B/Autoupdate"
+codesign --force --sign "$DEVELOPER_ID" --options runtime --timestamp "$SPARKLE/Versions/B/Updater.app"
+codesign --force --sign "$DEVELOPER_ID" --options runtime --timestamp "$SPARKLE"
 
 # Hardened runtime + secure timestamp are required for notarization.
 codesign --force --options runtime --timestamp --sign "$DEVELOPER_ID" "$APP"

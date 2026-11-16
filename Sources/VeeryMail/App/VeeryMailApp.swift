@@ -1,12 +1,18 @@
 import AppKit
 import VeeryMailCore
 import SwiftUI
+import Sparkle
 
 @main
 struct VeeryMailApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store = MailStore()
     @AppStorage("appearance") private var appearance = "dark"
+    private let updaterController: SPUStandardUpdaterController? = {
+        guard Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String != nil,
+              Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String != nil else { return nil }
+        return SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+    }()
 
     var body: some Scene {
         WindowGroup("Veery Mail", id: "main") {
@@ -17,7 +23,14 @@ struct VeeryMailApp: App {
                 .veeryTheme(appearance)
         }
         .windowToolbarStyle(.unified(showsTitle: false))
-        .commands { MailCommands(store: store) }
+        .commands {
+            MailCommands(store: store)
+            CommandGroup(after: .appInfo) {
+                if let updaterController {
+                    CheckForUpdatesView(updater: updaterController.updater)
+                }
+            }
+        }
 
         // Each message being written gets its own movable window.
         WindowGroup("New Message", id: "compose", for: UUID.self) { $id in
@@ -36,6 +49,17 @@ struct VeeryMailApp: App {
                 .environment(store)
                 .veeryTheme(appearance)
         }
+    }
+}
+
+private struct CheckForUpdatesView: View {
+    let updater: SPUUpdater
+    @State private var canCheck = false
+
+    var body: some View {
+        Button("Check for Updates…") { updater.checkForUpdates() }
+            .disabled(!canCheck)
+            .onReceive(updater.publisher(for: \.canCheckForUpdates)) { canCheck = $0 }
     }
 }
 

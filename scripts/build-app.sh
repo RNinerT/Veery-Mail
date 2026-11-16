@@ -13,6 +13,13 @@ cp "$BIN" "$APP/Contents/MacOS/VeeryMail"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
+# SwiftPM links the binary framework but does not put it in our hand-built bundle.
+FRAMEWORK="$(find .build/artifacts -name Sparkle.framework -type d -print -quit)"
+test -n "$FRAMEWORK" || { echo "Sparkle.framework not found" >&2; exit 1; }
+mkdir -p "$APP/Contents/Frameworks"
+ditto "$FRAMEWORK" "$APP/Contents/Frameworks/Sparkle.framework"
+install_name_tool -add_rpath '@executable_path/../Frameworks' "$APP/Contents/MacOS/VeeryMail"
+
 # Ad-hoc signature so Keychain and notifications work locally.
 codesign --force --deep --sign - "$APP"
 

@@ -16,12 +16,22 @@ Requires an Apple Developer Program membership (the account holder enrolls and c
 3. Build, sign, notarize and staple:
 
    ```bash
-   DEVELOPER_ID="Developer ID Application: <NAME> (<TEAM_ID>)" NOTARY_PROFILE=veery-notary ./scripts/release.sh
+   DEVELOPER_ID="Developer ID Application: <NAME> (<TEAM_ID>)" NOTARY_PROFILE=veery-notary SPARKLE_PUBLIC_ED_KEY="<PUBLIC_KEY>" ./scripts/release.sh
    ```
 
    The result is `build/Veery-Mail.zip`, a universal (Apple silicon + Intel) app with hardened runtime, a stapled notarization ticket and a passing `spctl` assessment.
 
-Or run **Actions → Release → Run workflow** after adding the secrets listed at the top of `.github/workflows/release.yml`. It uploads the zip as a workflow artifact; publishing a GitHub release is left to you.
+## Automatic updates
+
+Veery Mail uses Sparkle to check for signed updates and installs them when the app quits. The first release with Sparkle must be installed manually. Development builds do not enable update checks.
+
+1. Download the Sparkle 2.10.1 distribution from its official GitHub release and run `bin/generate_keys` on your Mac. Keep the private key in your Keychain and back it up securely. Record the public key it prints.
+2. In GitHub repository settings, add the public key as the Actions variable `SPARKLE_PUBLIC_ED_KEY`. Export the private key with Sparkle's `generate_keys -x` and add its contents as the Actions secret `SPARKLE_PRIVATE_ED_KEY`. Delete the exported file securely after adding it. Never commit the private key.
+3. Configure the Apple signing and notarization secrets listed in `.github/workflows/release.yml`.
+4. Increase both `CFBundleShortVersionString` and `CFBundleVersion` in `Resources/Info.plist`. Create a Git tag matching the version, such as `v0.2.0`, and push it to GitHub.
+5. Run **Actions → Release → Run workflow** and enter the existing tag. The workflow signs and notarizes the app, generates a signed update feed, and publishes both as release assets. The feed points to the latest GitHub release.
+
+The update signing key must stay the same across releases. Verify updates on a test Mac, including a quit canceled by an unsaved draft, before distributing a release.
 
 ## Before a public release
 

@@ -12,9 +12,14 @@
 name: Release
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, matching the app version (for example v0.2.0)'
+        required: true
+        type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   release:
@@ -54,7 +59,29 @@ jobs:
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
           NOTARY_PROFILE: veery-notary
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
         run: ./scripts/release.sh
+      - name: Create signed update feed
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release tag'; exit 1; }
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist)
+          [[ "$RELEASE_TAG" == "v$VERSION" ]] || { echo 'Tag must match app version'; exit 1; }
+          test -n "$SPARKLE_PRIVATE_ED_KEY" || { echo 'Sparkle signing key is missing'; exit 1; }
+          curl -fL -o "$RUNNER_TEMP/sparkle.tar.xz" https://github.com/sparkle-project/Sparkle/releases/download/2.10.1/Sparkle-2.10.1.tar.xz
+          echo '1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27  '"$RUNNER_TEMP/sparkle.tar.xz" | shasum -a 256 -c
+          mkdir -p "$RUNNER_TEMP/sparkle" "$RUNNER_TEMP/updates"
+          tar -xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
+          cp build/Veery-Mail.zip "$RUNNER_TEMP/updates/"
+          printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | "$RUNNER_TEMP/sparkle/bin/generate_appcast" --ed-key-file - -o build/appcast.xml --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/" "$RUNNER_TEMP/updates"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh release create "$RELEASE_TAG" build/Veery-Mail.zip build/appcast.xml --title "Veery Mail $RELEASE_TAG" --generate-notes --verify-tag
       - uses: actions/upload-artifact@v4
         with:
           name: Veery-Mail
