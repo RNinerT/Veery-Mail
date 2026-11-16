@@ -1,6 +1,6 @@
 # Signed, notarized release build. Runs only when started by hand (Actions → Release → Run workflow)
-# and only if the signing secrets below have been added to the repository. Nothing is published:
-# the zip is uploaded as a workflow artifact for you to check and attach to a release yourself.
+# and only if the signing secrets below have been added to the repository.
+# It publishes the signed app and appcast to a GitHub release.
 #
 # Repository secrets to add (Settings → Secrets and variables → Actions):
 #   DEVELOPER_ID_P12_BASE64   base64 of your "Developer ID Application" certificate exported as .p12
@@ -9,6 +9,7 @@
 #   NOTARY_APPLE_ID           Apple ID email used for notarization
 #   NOTARY_TEAM_ID            10-character team ID
 #   NOTARY_PASSWORD           app-specific password for that Apple ID
+#   SPARKLE_PRIVATE_ED_KEY    Sparkle update-signing private key
 name: Release
 on:
   workflow_dispatch:
@@ -59,7 +60,6 @@ jobs:
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
           NOTARY_PROFILE: veery-notary
-          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
         run: ./scripts/release.sh
       - name: Create signed update feed
         env:
