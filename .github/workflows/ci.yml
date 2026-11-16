@@ -55,25 +55,36 @@ jobs:
           lipo -archs "$APP/Contents/MacOS/VeeryMail"
           /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist"
 
-      - name: Launch smoke test (demo mode, compose window, emoji picker)
-        timeout-minutes: 3
+      - name: Launch smoke test (demo mode, then compose window and emoji picker)
+        timeout-minutes: 4
         run: |
-          APP="build/Veery Mail.app"
-          rm -f ~/Library/Logs/DiagnosticReports/VeeryMail* 2>/dev/null || true
-          open "$APP" --args -demo YES -uitest.openEmoji YES
-          sleep 15
-          screencapture -x smoke.png 2>/dev/null || true
-          if pgrep -x VeeryMail >/dev/null; then
-            echo "App still running after opening compose and the emoji picker."
-            pkill -x VeeryMail || true
-          else
-            echo "::error::Veery Mail exited during the smoke test"
-            for f in ~/Library/Logs/DiagnosticReports/VeeryMail*; do
+          BIN="build/Veery Mail.app/Contents/MacOS/VeeryMail"
+          REPORTS="$HOME/Library/Logs/DiagnosticReports"
+          run_phase() {
+            local name="$1"; shift
+            rm -f "$REPORTS"/VeeryMail* 2>/dev/null || true
+            "$BIN" "$@" > "smoke-$name.log" 2>&1 &
+            local pid=$!
+            sleep 15
+            screencapture -x "smoke-$name.png" 2>/dev/null || true
+            if kill -0 $pid 2>/dev/null; then
+              echo "[$name] still running"
+              kill $pid; wait $pid 2>/dev/null || true
+              return 0
+            fi
+            echo "::error::[$name] Veery Mail exited"
+            echo "== output"; cat "smoke-$name.log"
+            sleep 10
+            for f in "$REPORTS"/VeeryMail* /Library/Logs/DiagnosticReports/VeeryMail*; do
               [ -f "$f" ] || continue
-              echo "== $f"; head -c 60000 "$f"
+              echo "== $f"; head -c 80000 "$f"; cp "$f" .
             done
-            exit 1
-          fi
+            return 1
+          }
+          status=0
+          run_phase launch -demo YES || status=1
+          run_phase emoji -demo YES -uitest.openEmoji YES || status=1
+          exit $status
 
       - name: Strict concurrency check (warnings only)
         continue-on-error: true
@@ -97,5 +108,7 @@ jobs:
           name: logs-${{ matrix.os }}
           path: |
             *.log
-            smoke.png
+            smoke-*.png
+            smoke-*.log
+            VeeryMail*.ips
           retention-days: 14
