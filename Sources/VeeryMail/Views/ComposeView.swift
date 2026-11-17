@@ -49,6 +49,8 @@ struct ComposeView: View {
     @State private var syncTask: Task<Void, Never>?
     @State private var guardInstalled = false
     @AppStorage("ai.enabled") private var aiEnabled = false
+    /// Settings → General → Sending. HTML (with a plain-text copy) unless the user picks plain text.
+    @AppStorage("compose.html") private var composeHTML = true
 
     private var draft: Binding<ComposeDraft> {
         Binding(get: { store.composeDrafts[id] ?? ComposeDraft(identityId: nil) },
@@ -61,7 +63,7 @@ struct ComposeView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            FormattingBar(controller: controller, showEmoji: $showEmoji, showLink: $showLink)
+            FormattingBar(controller: controller, isHTML: composeHTML, showEmoji: $showEmoji, showLink: $showLink)
             if aiEnabled || store.isDemo { aiBar }
             Divider()
             RichTextEditor(controller: controller, initialRTF: draft.wrappedValue.bodyRTF,
@@ -419,7 +421,7 @@ struct ComposeView: View {
         guard store.composeDrafts[id] != nil else { return }
         draft.wrappedValue.body = controller.plainText
         draft.wrappedValue.bodyRTF = controller.rtfData
-        draft.wrappedValue.htmlBody = controller.html
+        draft.wrappedValue.htmlBody = composeHTML ? controller.html(always: true) : nil
         problem = nil
     }
 
@@ -512,41 +514,49 @@ struct ComposeView: View {
 /// Formatting controls for the compose body.
 struct FormattingBar: View {
     let controller: RichTextController
+    /// In plain-text mode the text-styling tools are hidden; emoji stays.
+    var isHTML = true
     @Binding var showEmoji: Bool
     @Binding var showLink: Bool
 
     var body: some View {
         HStack(spacing: 2) {
-            tool("bold", "Bold (⌘B)") { controller.toggleTrait(.boldFontMask) }.keyboardShortcut("b")
-            tool("italic", "Italic (⌘I)") { controller.toggleTrait(.italicFontMask) }.keyboardShortcut("i")
-            tool("underline", "Underline (⌘U)") { controller.toggle(.underlineStyle) }.keyboardShortcut("u")
-            tool("strikethrough", "Strikethrough") { controller.toggle(.strikethroughStyle) }
-            divider
-            tool("textformat.size.smaller", "Smaller text") { controller.adjustSize(by: -2) }
-            tool("textformat.size.larger", "Bigger text") { controller.adjustSize(by: 2) }
-            Menu {
-                Button("Automatic") { controller.setColor(nil) }
-                Divider()
-                ForEach(Self.colors.indices, id: \.self) { i in
-                    Button { controller.setColor(Self.colors[i].1) } label: {
-                        Label(Self.colors[i].0, systemImage: "circle.fill")
+            if isHTML {
+                tool("bold", "Bold (⌘B)") { controller.toggleTrait(.boldFontMask) }.keyboardShortcut("b")
+                tool("italic", "Italic (⌘I)") { controller.toggleTrait(.italicFontMask) }.keyboardShortcut("i")
+                tool("underline", "Underline (⌘U)") { controller.toggle(.underlineStyle) }.keyboardShortcut("u")
+                tool("strikethrough", "Strikethrough") { controller.toggle(.strikethroughStyle) }
+                divider
+                tool("textformat.size.smaller", "Smaller text") { controller.adjustSize(by: -2) }
+                tool("textformat.size.larger", "Bigger text") { controller.adjustSize(by: 2) }
+                Menu {
+                    Button("Automatic") { controller.setColor(nil) }
+                    Divider()
+                    ForEach(Self.colors.indices, id: \.self) { i in
+                        Button { controller.setColor(Self.colors[i].1) } label: {
+                            Label(Self.colors[i].0, systemImage: "circle.fill")
+                        }
                     }
+                } label: {
+                    Image(systemName: "paintpalette")
                 }
-            } label: {
-                Image(systemName: "paintpalette")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Text color")
+                .accessibilityLabel("Text color")
+                divider
+                tool("list.bullet", "Bulleted list") { controller.applyLineStyle(.bullets) }
+                tool("list.number", "Numbered list") { controller.applyLineStyle(.numbers) }
+                tool("text.quote", "Quote") { controller.applyLineStyle(.quote) }
+                tool("link", "Add link (⇧⌘K)") { showLink = true }.keyboardShortcut("k", modifiers: [.command, .shift])
+                tool("eraser", "Clear formatting") { controller.clearFormatting() }
+                divider
+            } else {
+                Text("Plain text").font(.caption).foregroundStyle(.secondary)
+                    .help("Change the message format in Settings → General → Sending")
+                divider
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Text color")
-            .accessibilityLabel("Text color")
-            divider
-            tool("list.bullet", "Bulleted list") { controller.applyLineStyle(.bullets) }
-            tool("list.number", "Numbered list") { controller.applyLineStyle(.numbers) }
-            tool("text.quote", "Quote") { controller.applyLineStyle(.quote) }
-            tool("link", "Add link (⇧⌘K)") { showLink = true }.keyboardShortcut("k", modifiers: [.command, .shift])
-            tool("eraser", "Clear formatting") { controller.clearFormatting() }
-            divider
             Button { showEmoji.toggle() } label: {
                 Image(systemName: "face.smiling").frame(width: 26, height: 22)
             }

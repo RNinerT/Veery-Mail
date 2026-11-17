@@ -116,7 +116,7 @@ after:2026-01-01 before:2026-02-01 newer_than:7d older_than:1y
 
 **Writing**
 - Each message opens in **its own window**, which you can move anywhere and keep beside the inbox.
-- **Formatting**: bold, italic, underline, strikethrough, size, color, bulleted and numbered lists, quotes and links. Formatted mail is sent as HTML with a plain-text alternative.
+- **Formatting**: bold, italic, underline, strikethrough, size, color, bulleted and numbered lists, quotes and links. Messages are sent as HTML with a plain-text alternative by default; Settings → General → Sending can switch to plain text only.
 - **Emoji**: a searchable picker with every emoji category, country flags and recents, plus the full system Character Viewer.
 - **Signatures** per sending address (Settings → Signatures), for new messages and/or replies. Changing the From address swaps the signature.
 - **Save Draft** (⌘S) saves to Fastmail and closes the window. If the save fails, the window stays open with your text and the error. Closing a window with unsaved edits saves first. Drafts also autosave every 20 seconds, including recipient-only or attachment-only drafts.

@@ -417,6 +417,7 @@ struct SettingsView: View {
 struct GeneralSettings: View {
     @Environment(MailStore.self) private var store
     @AppStorage("undoSendSeconds") private var undoSeconds = 10.0
+    @AppStorage("compose.html") private var composeHTML = true
     @AppStorage("markReadDelay") private var markReadDelay = 0.0
     @AppStorage("loadRemoteContent") private var loadRemote = false
     @AppStorage("notifications") private var notifications = true
@@ -429,6 +430,10 @@ struct GeneralSettings: View {
     var body: some View {
         Form {
             Section("Sending") {
+                Picker("Compose messages as", selection: $composeHTML) {
+                    Text("HTML (rich text)").tag(true)
+                    Text("Plain text").tag(false)
+                }
                 Picker("Undo send window", selection: $undoSeconds) {
                     Text("Off").tag(0.0)
                     Text("5 seconds").tag(5.0)

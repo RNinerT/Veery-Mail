@@ -28,7 +28,9 @@ final class RichTextController {
     }
 
     /// HTML for the message, or nil when the text has no formatting worth sending.
-    var html: String? { HTMLExporter.html(from: attributedText) }
+    /// HTML for the message. With `always` (the default compose format) every non-empty message
+    /// gets HTML; otherwise only formatted text does.
+    func html(always: Bool) -> String? { HTMLExporter.html(from: attributedText, always: always) }
 
     // MARK: Editing
 
@@ -258,8 +260,9 @@ struct RichTextEditor: NSViewRepresentable {
 /// Converts the editor's text to small, inline-styled HTML that mail clients render reliably.
 /// Only formatting the toolbar can produce is exported; there are no external resources.
 enum HTMLExporter {
-    static func html(from text: NSAttributedString) -> String? {
-        guard text.length > 0, hasFormatting(text) else { return nil }
+    static func html(from text: NSAttributedString, always: Bool = false) -> String? {
+        guard text.length > 0, always || hasFormatting(text) else { return nil }
+        guard !text.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         var out = "<div style=\"font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5\">"
         let ns = text.string as NSString
         var location = 0
