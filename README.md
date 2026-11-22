@@ -120,8 +120,8 @@ after:2026-01-01 before:2026-02-01 newer_than:7d older_than:1y
 - **Signatures** per sending address (Settings → Signatures), for new messages and/or replies. Changing the From address swaps the signature.
 - **Save Draft** (⌘S) saves to Fastmail and closes the window. If the save fails, the window stays open with your text and the error. Closing a window with unsaved edits saves first. Drafts also autosave every 20 seconds, including recipient-only or attachment-only drafts.
 - **Recipients** are checked as you type: names with commas, quoted names, pasted lists across several lines and Bcc-only messages all work, and Send is disabled while any entry isn't a valid address.
-- **Contacts** shows your Fastmail address book, recent correspondence, and quick access to composing a message. Add a contact from this tab or from the message reader.
-- **Calendar** shows today's schedule and the next seven days. Connect calendars already configured on your Mac, then create events directly or from a message. Links back to mail are kept on this Mac.
+- **Contacts** shows your Fastmail address books and recent correspondence. Search by name, email, phone, or company. Sort by name or company, filter by address book or contact details, and add or edit names, email addresses, phone numbers, companies, and notes in writable address books.
+- **Calendar** shows your Fastmail agenda and the next seven days using the same Fastmail account as Mail. Choose **Allow Fastmail Calendar Access** if prompted, then approve access once in the browser. Create events directly or from a message. Links back to mail are kept on this Mac.
 
 - **Autocomplete** from your Fastmail contacts (JMAP Contacts) and people you've exchanged mail with.
 - **Undo Send** (5–30 seconds). Each message has its own countdown, so sending two messages close together keeps both undoable. Messages wait in an on-disk outbox, so quitting or crashing never loses one: at the next launch it is held for you to send or edit, and a send that was in progress is checked against your Sent mailbox before anything is sent again (no duplicates).
@@ -215,4 +215,4 @@ Sources/VeeryMail/
 
 - **Snooze** moves the conversation to a `Later` mailbox and back again. That happens while Veery Mail is running or at the next launch on this Mac; Fastmail's server-side snooze uses a vendor extension that isn't public.
 - One Fastmail account at a time. Message bodies are not cached for offline reading.
-- Calendar uses the calendars configured on this Mac. To see Fastmail events, add Fastmail to macOS Calendar first.
+- Calendar uses Fastmail OAuth. If Mail uses an API token, approving Calendar access switches that same mailbox to **Sign in with Fastmail**.

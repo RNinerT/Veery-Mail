@@ -5,22 +5,61 @@ struct ContactDraft: Identifiable {
     let id = UUID()
     var name = ""
     var email = ""
+    var contact: SavedContact?
+}
+
+private enum ContactSort: String, CaseIterable {
+    case ascending = "Name A–Z", descending = "Name Z–A", company = "Company"
+
+    func precedes(_ left: SavedContact, _ right: SavedContact) -> Bool {
+        if self == .company {
+            switch (left.organizations.first, right.organizations.first) {
+            case (let lhs?, let rhs?):
+                let comparison = lhs.localizedStandardCompare(rhs)
+                if comparison != .orderedSame { return comparison == .orderedAscending }
+            case (_?, nil): return true
+            case (nil, _?): return false
+            case (nil, nil): break
+            }
+        }
+        let comparison = left.name.localizedStandardCompare(right.name)
+        if comparison == .orderedSame { return left.id < right.id }
+        return comparison == (self == .descending ? .orderedDescending : .orderedAscending)
+    }
+}
+
+private enum ContactFilter: String, CaseIterable {
+    case all = "Any Contact", email = "Has Email", phone = "Has Phone", company = "Has Company"
+
+    func matches(_ card: SavedContact) -> Bool {
+        switch self {
+        case .all: return true
+        case .email: return !card.emails.isEmpty
+        case .phone: return !card.phones.isEmpty
+        case .company: return !card.organizations.isEmpty
+        }
+    }
 }
 
 struct ContactsView: View {
     @Environment(MailStore.self) private var store
     @State private var cards: [SavedContact] = []
+    @State private var books: [ContactAddressBook] = []
     @State private var search = ""
+    @State private var bookID = ""
+    @State private var filter = ContactFilter.all
+    @State private var sort = ContactSort.ascending
     @State private var selected: String?
     @State private var loading = true
     @State private var error: String?
 
     private var results: [SavedContact] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        return query.isEmpty ? cards : cards.filter { card in
-            ([card.name] + card.organizations + card.emails.map(\.email))
-                .contains { $0.localizedStandardContains(query) }
-        }
+        return cards.filter { card in
+            guard (bookID.isEmpty || card.addressBookIDs.contains(bookID)), filter.matches(card) else { return false }
+            let values = [card.name] + card.organizations + card.emails.map(\.email) + card.phones
+            return query.isEmpty || values.contains { $0.localizedStandardContains(query) }
+        }.sorted(by: sort.precedes)
     }
 
     var body: some View {
@@ -43,10 +82,37 @@ struct ContactsView: View {
                     .help("Refresh Contacts")
                     .disabled(loading)
                 }
-                TextField("Search contacts", text: $search)
+                TextField("Search name, email, phone, company", text: $search)
+                    .accessibilityLabel("Search contacts")
+                HStack {
+                    Menu {
+                        Picker("Sort by", selection: $sort) {
+                            ForEach(ContactSort.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }
+                    } label: { Label("Sort", systemImage: "arrow.up.arrow.down") }
+                    Menu {
+                        Picker("Address Book", selection: $bookID) {
+                            Text("All Address Books").tag("")
+                            ForEach(books) { Text($0.name).tag($0.id) }
+                        }
+                        Picker("Contact Details", selection: $filter) {
+                            ForEach(ContactFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }
+                    } label: {
+                        Label(bookID.isEmpty && filter == .all ? "Filter" : "Filtered",
+                              systemImage: "line.3.horizontal.decrease.circle")
+                    }
+                    Spacer(minLength: 0)
+                    Text("\(results.count)").monospacedDigit()
+                        .font(.caption).foregroundStyle(Theme.secondaryText)
+                        .accessibilityLabel("\(results.count) contacts")
+                }
+                if let error, !cards.isEmpty {
+                    Text(error).font(.caption).foregroundStyle(Theme.secondaryText)
+                }
                 if loading && cards.isEmpty {
                     ProgressView("Loading contacts…").frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error {
+                } else if let error, cards.isEmpty {
                     ContentUnavailableView("Contacts Unavailable", systemImage: "person.crop.circle.badge.exclamationmark",
                                            description: Text(error))
                 } else if results.isEmpty {
@@ -71,7 +137,10 @@ struct ContactsView: View {
             .background(Theme.canvas)
 
             if let contact = results.first(where: { $0.id == selected }) {
-                ContactProfile(contact: contact)
+                ContactProfile(contact: contact,
+                               books: books.filter { contact.addressBookIDs.contains($0.id) }) {
+                    store.newContact = ContactDraft(contact: contact)
+                }
             } else {
                 ContentUnavailableView("Select a Contact", systemImage: "person.crop.circle")
                     .foregroundStyle(WorkspacePaper.ink)
@@ -80,13 +149,16 @@ struct ContactsView: View {
             }
         }
         .task(id: store.accountKey) { await reload() }
-        .onChange(of: search) { _, _ in
-            if !results.contains(where: { $0.id == selected }) { selected = results.first?.id }
+        .onChange(of: results.map(\.id)) { _, ids in
+            if !ids.contains(where: { $0 == selected }) { selected = ids.first }
         }
         .sheet(item: $store.newContact) { draft in
-            ContactEditor(draft: draft, existing: cards) { contact in
+            ContactEditor(draft: draft, books: books.filter(\.canWrite), existing: cards) { contact in
                 search = ""
+                if !bookID.isEmpty && !contact.addressBookIDs.contains(bookID) { bookID = "" }
+                if !filter.matches(contact) { filter = .all }
                 if store.isDemo {
+                    cards.removeAll { $0.id == contact.id }
                     cards.append(contact)
                     selected = contact.id
                 } else {
@@ -97,7 +169,7 @@ struct ContactsView: View {
         }
     }
 
-    private var queryTitle: String { search.isEmpty ? "No Saved Contacts" : "No Matching Contacts" }
+    private var queryTitle: String { cards.isEmpty ? "No Saved Contacts" : "No Matching Contacts" }
 
     @MainActor private func reload(preselect: String? = nil) async {
         loading = true
@@ -106,11 +178,14 @@ struct ContactsView: View {
         defer { if store.isLive(generation) { loading = false } }
         guard let client = store.client, client.contactsAccountId != nil else {
             if store.isDemo {
+                books = [ContactAddressBook(id: "personal", name: "Personal", isDefault: true),
+                         ContactAddressBook(id: "work", name: "Work")]
+                guard cards.isEmpty else { return }
                 cards = [
                     SavedContact(id: "imani", name: "Imani Okafor", emails: [.init(email: "imani@fernhill.example")],
-                                 phones: ["(203) 555-0142"], organizations: ["Fernhill Studio"]),
-                    SavedContact(id: "priya", name: "Priya Raman", emails: [.init(email: "priya@example.org")]),
-                    SavedContact(id: "jonas", name: "Jonas Lindqvist", emails: [.init(email: "jonas@example.net")])
+                                 phones: ["(203) 555-0142"], organizations: ["Fernhill Studio"], addressBookIDs: ["work"]),
+                    SavedContact(id: "priya", name: "Priya Raman", emails: [.init(email: "priya@example.org")], addressBookIDs: ["personal"]),
+                    SavedContact(id: "jonas", name: "Jonas Lindqvist", emails: [.init(email: "jonas@example.net")], addressBookIDs: ["personal"])
                 ]
                 selected = cards.first?.id
             } else {
@@ -120,9 +195,13 @@ struct ContactsView: View {
             return
         }
         do {
-            let contacts = try await client.contactDirectory()
+            async let fetchedCards = client.contactDirectory()
+            async let fetchedBooks = client.contactAddressBooks()
+            let (contacts, addressBooks) = try await (fetchedCards, fetchedBooks)
             guard !Task.isCancelled, store.isLive(generation) else { return }
-            cards = contacts.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            books = addressBooks
+            if !books.contains(where: { $0.id == bookID }) { bookID = "" }
+            cards = contacts
             let preferred = preselect ?? selected
             selected = results.first(where: { $0.id == preferred })?.id ?? results.first?.id
         } catch {
@@ -134,6 +213,8 @@ struct ContactsView: View {
 private struct ContactProfile: View {
     @Environment(MailStore.self) private var store
     let contact: SavedContact
+    let books: [ContactAddressBook]
+    let edit: () -> Void
     @State private var messages: [EmailSummary] = []
     @State private var loading = true
     @State private var failure: String?
@@ -141,15 +222,58 @@ private struct ContactProfile: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
-                Text(contact.name).font(.system(size: 38, weight: .regular, design: .serif))
-                ForEach(contact.organizations, id: \.self) { Text($0).foregroundStyle(WorkspacePaper.secondary) }
-                if let address = contact.emails.first { Text(address.email).textSelection(.enabled) }
-                HStack {
-                    if let address = contact.emails.first {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if !books.isEmpty {
+                            Text(books.map(\.name).joined(separator: " · "))
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(WorkspacePaper.secondary)
+                        }
+                        Text(contact.name).font(.system(size: 38, weight: .regular, design: .serif))
+                        ForEach(Array(contact.organizations.enumerated()), id: \.offset) { _, company in
+                            Text(company).foregroundStyle(WorkspacePaper.secondary)
+                        }
+                    }
+                    Spacer(minLength: 10)
+                    Button("Edit", systemImage: "pencil", action: edit)
+                        .disabled(!store.isDemo && !books.contains(where: \.canWrite))
+                }
+                if let address = contact.emails.first {
+                    HStack {
                         Button("Compose", systemImage: "square.and.pencil") { store.compose(to: address) }
                             .buttonStyle(.borderedProminent)
                             .tint(WorkspacePaper.accent)
                         Button("Find Correspondence") { store.findCorrespondence(contact.emails) }
+                    }
+                }
+                if !contact.emails.isEmpty {
+                    LabeledContent("Email") {
+                        VStack(alignment: .leading, spacing: 5) {
+                            ForEach(contact.emails, id: \.email) { email in
+                                Text(email.email)
+                                    .textSelection(.enabled)
+                                    .contextMenu {
+                                        Button("Compose to This Address") { store.compose(to: email) }
+                                    }
+                            }
+                        }
+                    }
+                }
+                if !contact.phones.isEmpty {
+                    LabeledContent("Phone") {
+                        VStack(alignment: .leading, spacing: 5) {
+                            ForEach(Array(contact.phones.enumerated()), id: \.offset) { _, phone in
+                                Text(phone).textSelection(.enabled)
+                            }
+                        }
+                    }
+                }
+                if !contact.notes.isEmpty {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Notes").font(.headline)
+                        ForEach(Array(contact.notes.enumerated()), id: \.offset) { _, note in
+                            Text(note).textSelection(.enabled)
+                        }
                     }
                 }
                 Divider().padding(.top, 12)
@@ -177,18 +301,6 @@ private struct ContactProfile: View {
                         Divider()
                     }
                 }
-                if contact.emails.count > 1 || !contact.phones.isEmpty {
-                    DisclosureGroup("Contact details") {
-                        VStack(alignment: .leading, spacing: 7) {
-                            ForEach(contact.emails, id: \.email) { email in
-                                Button(email.email) { store.compose(to: email) }
-                            }
-                            ForEach(Array(Set(contact.phones)).sorted(), id: \.self) { Text($0).textSelection(.enabled) }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 8)
-                    }
-                }
             }
             .frame(maxWidth: 720, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -197,7 +309,7 @@ private struct ContactProfile: View {
         .foregroundStyle(WorkspacePaper.ink)
         .background(WorkspacePaper.surface)
         .environment(\.colorScheme, .light)
-        .task(id: contact.id) {
+        .task(id: contact.emails.map(\.email)) {
             loading = true
             messages = []
             failure = nil
@@ -215,58 +327,156 @@ private struct ContactProfile: View {
 private struct ContactEditor: View {
     @Environment(MailStore.self) private var store
     @Environment(\.dismiss) private var dismiss
-    @State var draft: ContactDraft
+    let draft: ContactDraft
+    let books: [ContactAddressBook]
     let existing: [SavedContact]
     let didSave: (SavedContact) async -> Void
+    @State private var original: ContactEdit?
+    @State private var values = ContactEdit()
+    @State private var addressBookID = ""
     @State private var saving = false
     @State private var error: String?
 
-    private var address: EmailAddress? {
-        let text = draft.email.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let parsed = EmailAddress.parseList(text).first, parsed.email == text else { return nil }
-        return EmailAddress(name: draft.name.trimmingCharacters(in: .whitespacesAndNewlines), email: parsed.email)
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Add Contact").font(.title2)
-            TextField("Name", text: $draft.name)
-            TextField("Email", text: $draft.email)
+        VStack(alignment: .leading, spacing: 14) {
+            Text(draft.contact == nil ? "Add Contact" : "Edit Contact").font(.title2)
+            if original != nil {
+                Form {
+                    Section("Name") {
+                        TextField("Display name", text: $values.name)
+                        if draft.contact == nil, !books.isEmpty {
+                            Picker("Address Book", selection: $addressBookID) {
+                                ForEach(books) { Text($0.name).tag($0.id) }
+                            }
+                        }
+                    }
+                    entries("Email", fields: $values.emails)
+                    entries("Phone", fields: $values.phones)
+                    entries("Company", fields: $values.organizations)
+                    entries("Note", fields: $values.notes, multiline: true)
+                }.formStyle(.grouped)
+            } else if error == nil {
+                ProgressView("Loading contact…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
             if let error { Text(error).foregroundStyle(.red) }
             HStack {
                 Spacer()
                 if saving { ProgressView().controlSize(.small) }
                 Button("Cancel", role: .cancel) { dismiss() }.disabled(saving)
-                Button("Save Contact") { Task { await save() } }
+                Button("Save Contact") { Task { await saveContact() } }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(saving || address == nil)
+                    .disabled(saving || original == nil)
             }
         }
         .padding(24)
-        .frame(width: 380)
+        .frame(width: 500, height: 510)
         .interactiveDismissDisabled(saving)
+        .task { await load() }
     }
 
-    @MainActor private func save() async {
-        guard let address, !saving else { return }
-        if let match = existing.first(where: { contact in
-            contact.emails.contains { $0.email.caseInsensitiveCompare(address.email) == .orderedSame }
-        }) {
-            error = "This email is already saved for \(match.name)."
+    private func entries(_ label: String, fields: Binding<[ContactEdit.Entry]>, multiline: Bool = false) -> some View {
+        Section(label) {
+            ForEach(fields) { $entry in
+                HStack {
+                    TextField(label, text: $entry.value, axis: multiline ? .vertical : .horizontal)
+                    Button {
+                        fields.wrappedValue.removeAll { $0.id == entry.id }
+                    } label: { Label("Remove \(label)", systemImage: "minus.circle") }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                }
+            }
+            Button("Add \(label)", systemImage: "plus") { fields.wrappedValue.append(.init()) }
+                .buttonStyle(.borderless)
+        }
+    }
+
+    private func load() async {
+        addressBookID = books.first(where: \.isDefault)?.id ?? books.first?.id ?? ""
+        do {
+            if let contact = draft.contact {
+                if store.isDemo {
+                    values = ContactEdit(name: contact.name)
+                    values.emails = contact.emails.map { .init(value: $0.email) }
+                    values.phones = contact.phones.map { .init(value: $0) }
+                    values.organizations = contact.organizations.map { .init(value: $0) }
+                    values.notes = contact.notes.map { .init(value: $0) }
+                } else {
+                    guard let client = store.client else { throw JMAPError.notConnected }
+                    let loaded = try await client.contactForEditing(contact.id)
+                    guard !Task.isCancelled else { return }
+                    values = loaded
+                }
+                original = values
+            } else {
+                values = ContactEdit(name: draft.name, email: draft.email)
+                original = ContactEdit()
+            }
+        } catch {
+            if !Task.isCancelled { self.error = error.localizedDescription }
+        }
+    }
+
+    private func saveContact() async {
+        guard let original, !saving else { return }
+        func cleaned(_ entries: [ContactEdit.Entry], original: [ContactEdit.Entry]) -> [ContactEdit.Entry] {
+            let old = Dictionary(uniqueKeysWithValues: original.map { ($0.id, $0.value) })
+            return entries.compactMap {
+                if old[$0.id] == $0.value { return $0 }
+                let text = $0.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return text.isEmpty ? nil : .init(id: $0.id, value: text)
+            }
+        }
+        var edited = values
+        if edited.name != original.name { edited.name = edited.name.trimmingCharacters(in: .whitespacesAndNewlines) }
+        edited.emails = cleaned(values.emails, original: original.emails)
+        edited.phones = cleaned(values.phones, original: original.phones)
+        edited.organizations = cleaned(values.organizations, original: original.organizations)
+        edited.notes = cleaned(values.notes, original: original.notes)
+        let originalEmails = Dictionary(uniqueKeysWithValues: original.emails.map { ($0.id, $0.value) })
+        guard edited.emails.allSatisfy({ entry in
+            originalEmails[entry.id] == entry.value || EmailAddress.parseList(entry.value).first?.email == entry.value
+        }) else {
+            error = "Enter one valid email address per row."
             return
         }
+        guard !edited.name.isEmpty || !edited.emails.isEmpty || !edited.phones.isEmpty || !edited.organizations.isEmpty else {
+            error = "Enter a name, email, phone number, or company."
+            return
+        }
+        if draft.contact == nil {
+            let addresses = Set(edited.emails.map { $0.value.lowercased() })
+            if let match = existing.first(where: { card in
+                card.emails.contains { addresses.contains($0.email.lowercased()) }
+            }) {
+                error = "An email on this card is already saved for \(match.name)."
+                return
+            }
+        }
         saving = true
-        defer { saving = false }
+        error = nil
         let generation = store.generation
+        defer { saving = false }
         do {
             let id: String
-            if store.isDemo { id = UUID().uuidString }
+            if store.isDemo { id = draft.contact?.id ?? UUID().uuidString }
             else {
                 guard let client = store.client else { throw JMAPError.notConnected }
-                id = try await client.addContact(address)
+                if let contact = draft.contact {
+                    try await client.updateContact(original, with: edited)
+                    id = contact.id
+                } else {
+                    id = try await client.createContact(edited, addressBookID: addressBookID.isEmpty ? nil : addressBookID)
+                }
             }
             guard store.isLive(generation) else { return }
-            await didSave(SavedContact(id: id, name: address.displayName, emails: [address]))
+            let emails = edited.emails.map { EmailAddress(name: edited.name.isEmpty ? nil : edited.name, email: $0.value) }
+            let companies = edited.organizations.map(\.value)
+            let name = edited.name.isEmpty ? companies.first ?? emails.first?.email ?? "Unnamed Contact" : edited.name
+            let saved = SavedContact(id: id, name: name, emails: emails, phones: edited.phones.map(\.value),
+                                     organizations: companies, addressBookIDs: draft.contact?.addressBookIDs ?? [addressBookID],
+                                     notes: edited.notes.map(\.value))
+            await didSave(saved)
             dismiss()
         } catch {
             if store.isLive(generation) { self.error = error.localizedDescription }
