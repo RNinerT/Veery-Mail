@@ -22,19 +22,29 @@ final class FastmailSignIn {
         }
     }
 
-    func start(store: MailStore, includeContacts: Bool) {
+    func start(store: MailStore, includeContacts: Bool, authorizeCalendar: Bool = false) {
         cancel()
+        let generation = store.generation
+        let account = store.client?.accountKey
+        let username = authorizeCalendar ? store.client?.session?.username : nil
+        if authorizeCalendar, account == nil || store.phase != .ready {
+            stage = .failed("Wait for your Fastmail mailbox to finish connecting, then try again.")
+            return
+        }
         stage = .preparing
         task = Task { [weak self] in
             guard let self else { return }
             do {
                 let metadata = try await oauth.discover()
-                let scopes = FastmailOAuth.scopes(for: metadata, includeContacts: includeContacts)
+                var scopes = FastmailOAuth.scopes(for: metadata, includeContacts: includeContacts)
+                let calendarResource = try authorizeCalendar ? FastmailOAuth.calendarResource(for: metadata) : nil
+                if calendarResource != nil { scopes.append(FastmailOAuth.calendarScope) }
                 let registration = try await registration(metadata, scopes: scopes)
                 let listener = LoopbackRedirectListener(path: FastmailOAuth.redirectPath)
                 self.listener = listener
                 let port = try await listener.start()
-                let pending = oauth.beginAuthorization(metadata, registration: registration, port: port, scopes: scopes)
+                let pending = oauth.beginAuthorization(metadata, registration: registration, port: port, scopes: scopes,
+                                                       calendarResource: calendarResource, loginHint: username)
                 try Task.checkCancellation()
                 stage = .waitingForBrowser
                 NSWorkspace.shared.open(pending.authorizationURL)
@@ -45,9 +55,15 @@ final class FastmailSignIn {
                 let code = try oauth.code(from: callback, for: pending,
                                           expectIssuer: metadata.authorizationResponseIssParameterSupported == true)
                 let tokens = try await oauth.exchange(code: code, pending: pending, metadata: metadata)
-                try AuthStore.saveOAuth(tokens: tokens, metadata: metadata)
+                try Task.checkCancellation()
+                if authorizeCalendar, let account {
+                    try await store.authorizeCalendar(tokens: tokens, metadata: metadata,
+                                                      generation: generation, account: account)
+                } else {
+                    try AuthStore.saveOAuth(tokens: tokens, metadata: metadata)
+                    store.startOAuth(tokens: tokens, metadata: metadata)
+                }
                 stage = .idle
-                store.startOAuth(tokens: tokens, metadata: metadata)
             } catch is CancellationError {
                 stage = .idle
             } catch let error as OAuthError where error == .canceled {

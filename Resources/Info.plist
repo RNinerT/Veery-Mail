@@ -13,8 +13,6 @@
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSCalendarsFullAccessUsageDescription</key>
-    <string>Veery Mail shows your agenda and saves events you create in Calendar.</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSSupportsAutomaticTermination</key><false/>
     <key>CFBundleURLTypes</key>

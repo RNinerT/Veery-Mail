@@ -12,6 +12,7 @@ public struct OAuthServerMetadata: Codable, Equatable, Sendable {
     public let tokenEndpoint: URL
     public let registrationEndpoint: URL?
     public let revocationEndpoint: URL?
+    public let protectedResources: [String]?
     public let scopesSupported: [String]
     public let codeChallengeMethodsSupported: [String]?
     public let authorizationResponseIssParameterSupported: Bool?
@@ -22,6 +23,7 @@ public struct OAuthServerMetadata: Codable, Equatable, Sendable {
         case tokenEndpoint = "token_endpoint"
         case registrationEndpoint = "registration_endpoint"
         case revocationEndpoint = "revocation_endpoint"
+        case protectedResources = "protected_resources"
         case scopesSupported = "scopes_supported"
         case codeChallengeMethodsSupported = "code_challenge_methods_supported"
         case authorizationResponseIssParameterSupported = "authorization_response_iss_parameter_supported"
@@ -42,6 +44,7 @@ public struct OAuthTokens: Codable, Equatable, Sendable {
     public var scope: String
     public let clientId: String
     public let issuer: String
+    public internal(set) var calendarResource: String? = nil
 
     public func expiresSoon(now: Date, margin: TimeInterval = 60) -> Bool {
         expiresAt.timeIntervalSince(now) < margin
@@ -111,6 +114,7 @@ public struct PendingAuthorization: Equatable, Sendable {
     public let issuer: String
     public let clientId: String
     public let authorizationURL: URL
+    let calendarResource: String?
 }
 
 public struct OAuthClientInfo: Sendable {
@@ -129,6 +133,27 @@ public final class FastmailOAuth: @unchecked Sendable {
     /// The path names the service, as the profile requires for clients of several servers.
     public static let redirectPath = "/oauth/fastmail"
     public static let jmapResource = "https://api.fastmail.com/jmap/session"
+    public static let calendarScope = "urn:ietf:params:oauth:scope:calendars"
+
+    public static func calendarResource(for metadata: OAuthServerMetadata) throws -> String {
+        guard metadata.scopesSupported.contains(calendarScope) else {
+            throw OAuthError.missingScope(calendarScope)
+        }
+        let discovery = "https://caldav.fastmail.com/.well-known/caldav"
+        guard let resources = metadata.protectedResources else { return discovery }
+        let candidates = resources.filter { value in
+            guard let url = URLComponents(string: value),
+                  url.scheme == "https", url.host == "caldav.fastmail.com",
+                  url.port == nil || url.port == 443, url.user == nil, url.password == nil,
+                  url.query == nil, url.fragment == nil else { return false }
+            return url.path.isEmpty || url.path == "/" || url.path == "/.well-known/caldav"
+                || url.path == "/dav" || url.path == "/dav/"
+        }
+        guard let matched = candidates.first(where: { $0 == discovery }) ?? candidates.first else {
+            throw OAuthError.unsupportedServer("no CalDAV resource was advertised")
+        }
+        return matched
+    }
 
     public let issuer: String
     let transport: HTTPTransport
@@ -165,6 +190,11 @@ public final class FastmailOAuth: @unchecked Sendable {
             throw OAuthError.badResponse("metadata")
         }
         guard metadata.issuer == issuer else { throw OAuthError.issuerMismatch }
+        let endpoints = [metadata.authorizationEndpoint, metadata.tokenEndpoint]
+            + [metadata.registrationEndpoint, metadata.revocationEndpoint].compactMap { $0 }
+        guard endpoints.allSatisfy({ $0.scheme == "https" && $0.host != nil && $0.user == nil && $0.password == nil }) else {
+            throw OAuthError.unsupportedServer("an invalid HTTPS endpoint was advertised")
+        }
         guard metadata.registrationEndpoint != nil else { throw OAuthError.unsupportedServer("no registration endpoint") }
         guard metadata.codeChallengeMethodsSupported?.contains("S256") ?? false else {
             throw OAuthError.unsupportedServer("PKCE S256 not supported")
@@ -218,7 +248,8 @@ public final class FastmailOAuth: @unchecked Sendable {
 
     /// Builds the browser URL. `port` is the loopback listener's port.
     public func beginAuthorization(_ metadata: OAuthServerMetadata, registration: OAuthRegistration,
-                                   port: UInt16, scopes: [String]) -> PendingAuthorization {
+                                   port: UInt16, scopes: [String], calendarResource: String? = nil,
+                                   loginHint: String? = nil) -> PendingAuthorization {
         let pkce = PKCE.make()
         let state = PKCE.base64URL(Data((0..<32).map { _ in UInt8.random(in: 0...255) }))
         let redirect = "http://127.0.0.1:\(port)" + Self.redirectPath
@@ -234,10 +265,12 @@ public final class FastmailOAuth: @unchecked Sendable {
             URLQueryItem(name: "state", value: state),
             URLQueryItem(name: "resource", value: Self.jmapResource),
         ]
+        if let calendarResource { query.append(URLQueryItem(name: "resource", value: calendarResource)) }
+        if let loginHint { query.append(URLQueryItem(name: "login_hint", value: loginHint)) }
         if scopes.contains("offline_access") { query.append(URLQueryItem(name: "prompt", value: "consent")) }
         c.queryItems = query
         return PendingAuthorization(state: state, pkce: pkce, redirectURI: redirect, issuer: metadata.issuer,
-                                    clientId: registration.clientId, authorizationURL: c.url!)
+                                    clientId: registration.clientId, authorizationURL: c.url!, calendarResource: calendarResource)
     }
 
     /// Validates the redirect and returns the authorization code.
@@ -269,20 +302,24 @@ public final class FastmailOAuth: @unchecked Sendable {
 
     public func exchange(code: String, pending: PendingAuthorization, metadata: OAuthServerMetadata,
                          now: Date = Date()) async throws -> OAuthTokens {
-        try await tokenRequest(metadata, [
+        var tokens = try await tokenRequest(metadata, [
             "grant_type": "authorization_code", "code": code, "redirect_uri": pending.redirectURI,
             "client_id": pending.clientId, "code_verifier": pending.pkce.verifier,
             "resource": Self.jmapResource,
         ], clientId: pending.clientId, previousRefresh: nil, now: now)
+        tokens.calendarResource = pending.calendarResource
+        return tokens
     }
 
     /// Exchanges the refresh token. The new refresh token replaces the old one, which must
     /// never be used again (Fastmail revokes access if it is).
-    public func refresh(_ tokens: OAuthTokens, metadata: OAuthServerMetadata, now: Date = Date()) async throws -> OAuthTokens {
-        try await tokenRequest(metadata, [
-            "grant_type": "refresh_token", "refresh_token": tokens.refreshToken,
-            "client_id": tokens.clientId, "resource": Self.jmapResource,
-        ], clientId: tokens.clientId, previousRefresh: tokens.refreshToken, now: now)
+    func refresh(_ tokens: OAuthTokens, metadata: OAuthServerMetadata, now: Date = Date(),
+                 resource: String = FastmailOAuth.jmapResource) async throws -> OAuthTokens {
+        var params = ["grant_type": "refresh_token", "refresh_token": tokens.refreshToken,
+                      "client_id": tokens.clientId, "resource": resource]
+        if resource != Self.jmapResource { params["scope"] = Self.calendarScope }
+        return try await tokenRequest(metadata, params, clientId: tokens.clientId,
+                                      previousRefresh: tokens.refreshToken, now: now)
     }
 
     public func revoke(_ tokens: OAuthTokens, metadata: OAuthServerMetadata) async {
@@ -344,11 +381,14 @@ public protocol TokenStore: Sendable {
 /// Concurrent requests share one refresh.
 public actor OAuthCredentials: CredentialProvider {
     private var tokens: OAuthTokens
-    private let metadata: OAuthServerMetadata
+    private var metadata: OAuthServerMetadata
     private let oauth: FastmailOAuth
     private let store: TokenStore
     private let now: @Sendable () -> Date
-    private var refreshing: Task<OAuthTokens, Error>?
+    private enum Audience { case mail, calendar }
+    private var refreshing: (audience: Audience, task: Task<OAuthTokens, Error>)?
+    private var calendarToken: OAuthTokens?
+    private var active = true
     /// Called once when the refresh token is permanently rejected (the user must sign in again).
     private let onSignedOut: @Sendable (OAuthError) -> Void
 
@@ -360,31 +400,88 @@ public actor OAuthCredentials: CredentialProvider {
     }
 
     public func accessToken() async throws -> String {
-        if tokens.expiresSoon(now: now()) {
-            return try await refreshNow().accessToken
-        }
-        return tokens.accessToken
+        try ensureActive()
+        return tokens.expiresSoon(now: now()) ? try await refreshNow(.mail).accessToken : tokens.accessToken
     }
 
     public func refreshAfterUnauthorized() async -> Bool {
-        (try? await refreshNow()) != nil
+        (try? await refreshNow(.mail)) != nil
+    }
+
+    public func calendarAccessToken(rejectedToken: String? = nil) async throws -> String {
+        try ensureActive()
+        if let calendarToken, !calendarToken.expiresSoon(now: now()), calendarToken.accessToken != rejectedToken {
+            return calendarToken.accessToken
+        }
+        return try await refreshNow(.calendar).accessToken
     }
 
     public func current() -> OAuthTokens { tokens }
 
-    private func refreshNow() async throws -> OAuthTokens {
-        if let refreshing { return try await refreshing.value }
-        let snapshot = tokens
-        let task = Task { try await oauth.refresh(snapshot, metadata: metadata, now: now()) }
-        refreshing = task
+    public func replaceGrant(_ replacement: OAuthTokens, metadata: OAuthServerMetadata) async throws {
+        while let refreshing { _ = try? await refreshing.task.value }
+        try Task.checkCancellation()
+        try ensureActive()
+        try store.save(replacement)
+        tokens = replacement
+        self.metadata = metadata
+        calendarToken = nil
+    }
+
+    /// Prevent background requests from saving a refresh token after sign-out has begun.
+    public func endSession() async -> OAuthTokens {
+        active = false
+        if let refreshing { _ = try? await refreshing.task.value }
+        return tokens
+    }
+
+    private func ensureActive() throws {
+        guard active else { throw CancellationError() }
+    }
+
+    private func refreshNow(_ audience: Audience) async throws -> OAuthTokens {
+        try ensureActive()
+        if let refreshing {
+            if refreshing.audience == audience { return try await refreshing.task.value }
+            _ = try await refreshing.task.value
+            return try await refreshNow(audience)
+        }
+        let resource: String
+        switch audience {
+        case .mail: resource = FastmailOAuth.jmapResource
+        case .calendar:
+            guard let calendarResource = tokens.calendarResource else {
+                throw OAuthError.missingScope(FastmailOAuth.calendarScope)
+            }
+            resource = calendarResource
+        }
+        let task = Task { try await self.performRefresh(audience, resource: resource) }
+        refreshing = (audience, task)
+        return try await task.value
+    }
+
+    private func performRefresh(_ audience: Audience, resource: String) async throws -> OAuthTokens {
         defer { refreshing = nil }
         do {
-            let fresh = try await task.value
-            tokens = fresh
-            try? store.save(fresh)   // the old refresh token is now dead; keep only the new one
+            let fresh = try await oauth.refresh(tokens, metadata: metadata, now: now(), resource: resource)
+            let calendarResource = tokens.calendarResource
+            if audience == .mail {
+                tokens = fresh
+                tokens.calendarResource = calendarResource
+            } else {
+                tokens.refreshToken = fresh.refreshToken
+                calendarToken = fresh
+            }
+            try ensureActive()
+            try store.save(tokens)
+            if audience == .calendar, !fresh.scope.isEmpty,
+               !fresh.scope.split(separator: " ").contains(Substring(FastmailOAuth.calendarScope)) {
+                calendarToken = nil
+                throw OAuthError.missingScope(FastmailOAuth.calendarScope)
+            }
             return fresh
         } catch let error as OAuthError {
-            if case .invalidGrant(let temporary, _) = error, !temporary {
+            if active, case .invalidGrant(let temporary, _) = error, !temporary {
                 store.clear()
                 onSignedOut(error)
             }

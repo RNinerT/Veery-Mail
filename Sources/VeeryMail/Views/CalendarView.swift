@@ -1,5 +1,5 @@
 import AppKit
-import EventKit
+import VeeryMailCore
 import SwiftUI
 
 struct EventDraft: Identifiable {
@@ -24,21 +24,36 @@ private struct AgendaEvent: Identifiable {
 
 struct CalendarView: View {
     @Environment(MailStore.self) private var mail
-    @State private var eventStore = EKEventStore()
-    @State private var access = EKEventStore.authorizationStatus(for: .event)
+    @State private var authorization = FastmailSignIn()
+    @AppStorage("contacts.enabled") private var includeContacts = true
     @State private var date = Calendar.current.startOfDay(for: Date())
-    @State private var calendars: [EKCalendar] = []
+    @State private var calendars: [FastmailCalendarCollection] = []
     @State private var selectedCalendar = ""
     @State private var events: [AgendaEvent] = []
     @State private var selectedEvent: String?
-    @State private var requesting = false
+    @State private var loading = false
+    @State private var refreshCount = 0
     @State private var error: String?
+    @State private var needsAuthorization = false
     @State private var demoEvents: [AgendaEvent] = []
 
     private let calendar = Calendar.current
-    private var allowed: Bool { mail.isDemo || access == .fullAccess }
+    private var allowed: Bool { mail.isDemo || mail.fastmailCalendar != nil }
     private var dayEvents: [AgendaEvent] { eventsOn(date) }
-    private var canAdd: Bool { mail.isDemo || calendars.contains(where: \.allowsContentModifications) }
+    private var canAdd: Bool { mail.isDemo || calendars.contains(where: \.canCreateEvents) }
+
+    private struct AgendaQuery: Equatable {
+        let date: Date
+        let calendarID: String
+        let generation: Int
+        let hasCalendar: Bool
+        let refresh: Int
+    }
+
+    private var query: AgendaQuery {
+        AgendaQuery(date: date, calendarID: selectedCalendar, generation: mail.generation,
+                    hasCalendar: allowed, refresh: refreshCount)
+    }
 
     var body: some View {
         @Bindable var mail = mail
@@ -51,8 +66,17 @@ struct CalendarView: View {
                             .font(.system(size: 46, weight: .regular, design: .serif))
                         Text(daySummary).foregroundStyle(WorkspacePaper.secondary)
                     }
-                    timeline
-                    week
+                    if needsAuthorization {
+                        accessPrompt
+                        if let error, !authorization.isBusy { Text(error).foregroundStyle(WorkspacePaper.accent) }
+                    } else if let error {
+                        Text(error).foregroundStyle(WorkspacePaper.accent)
+                    } else if loading {
+                        ProgressView("Loading Fastmail Calendar…").controlSize(.small)
+                    } else {
+                        timeline
+                        week
+                    }
                 } else {
                     accessPrompt
                 }
@@ -64,17 +88,19 @@ struct CalendarView: View {
         .foregroundStyle(WorkspacePaper.ink)
         .background(WorkspacePaper.surface)
         .environment(\.colorScheme, .light)
-        .onAppear { refresh() }
-        .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged, object: eventStore)) { _ in refresh() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
-        .onChange(of: date) { _, _ in selectedEvent = nil; refresh() }
-        .onChange(of: selectedCalendar) { _, _ in selectedEvent = nil; refresh() }
-        .sheet(item: Binding(get: { allowed ? mail.newEvent : nil }, set: { mail.newEvent = $0 })) { draft in
-            EventEditor(draft: draft, calendars: calendars.filter(\.allowsContentModifications),
-                        defaultCalendar: calendars.first { $0.calendarIdentifier == selectedCalendar && $0.allowsContentModifications }
-                            ?? eventStore.defaultCalendarForNewEvents,
+        .task(id: query) { await refresh(query) }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if allowed && !authorization.isBusy { refreshCount += 1 }
+        }
+        .onChange(of: authorization.stage) { previous, stage in
+            if previous == .finishing && stage == .idle && allowed { refreshCount += 1 }
+        }
+        .onDisappear { authorization.cancel() }
+        .sheet(item: Binding(get: { canAdd ? mail.newEvent : nil }, set: { mail.newEvent = $0 })) { draft in
+            EventEditor(draft: draft, calendars: calendars.filter(\.canCreateEvents),
+                        defaultCalendar: calendars.first { $0.id == selectedCalendar && $0.canCreateEvents },
                         isDemo: mail.isDemo) { values in
-                try save(values, mailID: draft.mailID)
+                try await save(values, mailID: draft.mailID)
             }
         }
     }
@@ -88,14 +114,18 @@ struct CalendarView: View {
             if !calendars.isEmpty {
                 Picker("Calendar", selection: $selectedCalendar) {
                     Text("All Calendars").tag("")
-                    ForEach(calendars, id: \.calendarIdentifier) { item in
-                        Text(item.title).tag(item.calendarIdentifier)
+                    ForEach(calendars, id: \.id) { item in
+                        Text(item.title).tag(item.id)
                     }
                 }
                 .labelsHidden()
             }
             Button { moveDay(-1) } label: { Label("Previous Day", systemImage: "chevron.left") }
                 .labelStyle(.iconOnly)
+            Button { refreshCount += 1 } label: { Label("Refresh Calendar", systemImage: "arrow.clockwise") }
+                .labelStyle(.iconOnly)
+                .help("Refresh Calendar")
+                .disabled(loading)
             Button("Today") { date = calendar.startOfDay(for: Date()) }
             Button { moveDay(1) } label: { Label("Next Day", systemImage: "chevron.right") }
                 .labelStyle(.iconOnly)
@@ -112,26 +142,32 @@ struct CalendarView: View {
     private var accessPrompt: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Calendar").font(.system(size: 42, design: .serif))
-            Text("Show calendars already set up on this Mac, including Fastmail if you’ve added it to Calendar.")
+            Text("Use the Fastmail account already open in Veery. Fastmail may ask you to approve Calendar access once.")
                 .foregroundStyle(WorkspacePaper.secondary)
-            if access == .denied || access == .restricted {
-                Text("Allow Veery Mail in System Settings → Privacy & Security → Calendars.")
-                Button("Open System Settings") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-            } else {
-                Button("Connect Calendar") { Task { await requestAccess() } }
-                    .buttonStyle(.borderedProminent)
-                    .tint(WorkspacePaper.accent)
-                    .disabled(requesting)
+            Button("Allow Fastmail Calendar Access") {
+                authorization.start(store: mail, includeContacts: includeContacts || mail.client?.contactsAccountId != nil,
+                                    authorizeCalendar: true)
             }
-            if let error { Text(error).foregroundStyle(WorkspacePaper.accent) }
+            .buttonStyle(.borderedProminent)
+            .tint(WorkspacePaper.accent)
+            .disabled(authorization.isBusy || mail.phase != .ready)
+            switch authorization.stage {
+            case .preparing, .finishing:
+                ProgressView("Verifying Fastmail Calendar access…").controlSize(.small)
+            case .waitingForBrowser:
+                HStack {
+                    Text("Approve access in your browser, then return here.")
+                    Button("Cancel") { authorization.cancel() }
+                }
+            case .failed(let message):
+                Text(message).foregroundStyle(WorkspacePaper.accent)
+            case .idle: EmptyView()
+            }
         }
     }
 
     private var daySummary: String {
+        if loading || error != nil { return "Fastmail Calendar" }
         let count = dayEvents.count
         guard count > 0 else { return "No events scheduled" }
         let text = count == 1 ? "1 event" : "\(count) events"
@@ -243,15 +279,12 @@ struct CalendarView: View {
         if let newDate = calendar.date(byAdding: .day, value: days, to: date) { date = newDate }
     }
 
-    @MainActor private func requestAccess() async {
-        requesting = true
-        defer { requesting = false; refresh() }
-        do { _ = try await eventStore.requestFullAccessToEvents() }
-        catch { self.error = error.localizedDescription }
-    }
-
-    private func refresh() {
-        access = EKEventStore.authorizationStatus(for: .event)
+    private func refresh(_ request: AgendaQuery) async {
+        selectedEvent = nil
+        error = nil
+        needsAuthorization = false
+        loading = allowed
+        defer { if !Task.isCancelled, request == query { loading = false } }
         if mail.isDemo {
             let today = calendar.startOfDay(for: Date())
             let samples: [(Int, Int, String, Color)] = [
@@ -267,57 +300,73 @@ struct CalendarView: View {
             events.sort { $0.start < $1.start }
             return
         }
-        guard access == .fullAccess else {
+        guard let service = mail.fastmailCalendar else {
             calendars = []
             events = []
             return
         }
-        calendars = eventStore.calendars(for: .event).sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-        if !selectedCalendar.isEmpty, !calendars.contains(where: { $0.calendarIdentifier == selectedCalendar }) {
-            selectedCalendar = ""
+        guard let end = calendar.date(byAdding: .day, value: 8, to: request.date) else { return }
+        do {
+            let available = try await service.calendars()
+            guard !Task.isCancelled, request == query else { return }
+            calendars = available
+            if !request.calendarID.isEmpty, !available.contains(where: { $0.id == request.calendarID }) {
+                selectedCalendar = ""
+                return
+            }
+            let shown = request.calendarID.isEmpty ? available : available.filter { $0.id == request.calendarID }
+            var agenda: [AgendaEvent] = []
+            for collection in shown {
+                let instances = try await service.events(in: collection, from: request.date, to: end, calendar: calendar)
+                guard !Task.isCancelled, request == query else { return }
+                let color = collection.color.flatMap(calendarColor) ?? WorkspacePaper.accent
+                agenda += instances.map { event in
+                    AgendaEvent(id: collection.id + ":" + event.id, title: event.title, start: event.start,
+                                end: event.end, allDay: event.allDay, calendarName: collection.title,
+                                color: color, location: event.location, notes: event.notes,
+                                relatedMessage: mail.calendarMessage(for: event.uid))
+                }
+            }
+            events = agenda.sorted { $0.start < $1.start }
+        } catch {
+            guard !Task.isCancelled, request == query else { return }
+            events = []
+            if case FastmailCalendarError.http(let status) = error { needsAuthorization = [401, 403].contains(status) }
+            if case OAuthError.server(let code, _) = error {
+                needsAuthorization = ["invalid_target", "invalid_scope", "insufficient_scope"].contains(code)
+            }
+            self.error = error.localizedDescription
         }
-        guard let end = calendar.date(byAdding: .day, value: 8, to: date) else { return }
-        let shown = selectedCalendar.isEmpty ? nil : calendars.filter { $0.calendarIdentifier == selectedCalendar }
-        let predicate = eventStore.predicateForEvents(withStart: date, end: end, calendars: shown)
-        events = eventStore.events(matching: predicate).map { event in
-            let identifier = event.calendarItemIdentifier
-            let color = event.calendar.cgColor.map { Color(cgColor: $0) } ?? WorkspacePaper.accent
-            return AgendaEvent(id: "\(identifier):\(event.startDate.timeIntervalSinceReferenceDate)",
-                               title: event.title ?? "Untitled Event", start: event.startDate,
-                               end: event.endDate, allDay: event.isAllDay, calendarName: event.calendar.title,
-                               color: color, location: event.location, notes: event.notes,
-                               relatedMessage: mail.calendarMessage(for: identifier))
-        }.sorted { $0.start < $1.start }
     }
 
-    private func save(_ values: EventValues, mailID: String?) throws {
+    private func calendarColor(_ value: String) -> Color? {
+        let hex = value.dropFirst()
+        guard value.first == "#", [6, 8].contains(hex.count), let rgb = UInt32(hex.prefix(6), radix: 16) else { return nil }
+        return Color(red: Double((rgb >> 16) & 255) / 255,
+                     green: Double((rgb >> 8) & 255) / 255, blue: Double(rgb & 255) / 255)
+    }
+
+    private func save(_ values: EventValues, mailID: String?) async throws {
+        let generation = mail.generation
         if mail.isDemo {
             demoEvents.append(AgendaEvent(id: UUID().uuidString, title: values.title, start: values.start,
                                           end: values.end, allDay: values.allDay, calendarName: "Sample Calendar",
                                           color: .blue, location: values.location, notes: values.notes, relatedMessage: mailID))
         } else {
-            guard let target = calendars.first(where: { $0.calendarIdentifier == values.calendarID }),
-                  target.allowsContentModifications else { throw AgendaError.noWritableCalendar }
-            let event = EKEvent(eventStore: eventStore)
-            event.title = values.title
-            event.isAllDay = values.allDay
-            event.startDate = values.start
-            event.endDate = values.end
-            event.location = values.location
-            event.notes = values.notes
-            event.calendar = target
-            try eventStore.save(event, span: .thisEvent)
-            if let mailID { mail.linkCalendarEvent(event.calendarItemIdentifier, to: mailID) }
-            if !selectedCalendar.isEmpty { selectedCalendar = target.calendarIdentifier }
+            guard let service = mail.fastmailCalendar else { throw JMAPError.notConnected }
+            guard let target = calendars.first(where: { $0.id == values.calendarID }) else {
+                throw FastmailCalendarError.readOnly
+            }
+            let event = CalendarEventInput(title: values.title, start: values.start, end: values.end,
+                                           allDay: values.allDay, location: values.location, notes: values.notes)
+            let uid = try await service.create(event, in: target, calendar: calendar)
+            guard mail.isLive(generation) else { return }
+            if let mailID { mail.linkCalendarEvent(uid, to: mailID) }
+            if !selectedCalendar.isEmpty { selectedCalendar = target.id }
         }
         date = calendar.startOfDay(for: values.start)
-        refresh()
+        refreshCount += 1
     }
-}
-
-private enum AgendaError: LocalizedError {
-    case noWritableCalendar
-    var errorDescription: String? { "Choose a calendar that allows changes." }
 }
 
 private struct EventValues {
@@ -340,17 +389,18 @@ private struct EventEditor: View {
     @State private var location = ""
     @State private var notes = ""
     @State private var error: String?
-    let calendars: [EKCalendar]
+    @State private var saving = false
+    let calendars: [FastmailCalendarCollection]
     let isDemo: Bool
-    let save: (EventValues) throws -> Void
+    let save: (EventValues) async throws -> Void
 
-    init(draft: EventDraft, calendars: [EKCalendar], defaultCalendar: EKCalendar?, isDemo: Bool,
-         save: @escaping (EventValues) throws -> Void) {
+    init(draft: EventDraft, calendars: [FastmailCalendarCollection], defaultCalendar: FastmailCalendarCollection?, isDemo: Bool,
+         save: @escaping (EventValues) async throws -> Void) {
         _title = State(initialValue: draft.title)
         _start = State(initialValue: draft.start)
         _end = State(initialValue: draft.start.addingTimeInterval(1800))
-        _destination = State(initialValue: calendars.first { $0.calendarIdentifier == defaultCalendar?.calendarIdentifier }?.calendarIdentifier
-                             ?? calendars.first?.calendarIdentifier ?? "")
+        _destination = State(initialValue: calendars.first { $0.id == defaultCalendar?.id }?.id
+                             ?? calendars.first?.id ?? "")
         self.calendars = calendars
         self.isDemo = isDemo
         self.save = save
@@ -365,7 +415,7 @@ private struct EventEditor: View {
                 if !isDemo {
                     Picker("Calendar", selection: $destination) {
                         if calendars.isEmpty { Text("No writable calendars").tag("") }
-                        ForEach(calendars, id: \.calendarIdentifier) { Text($0.title).tag($0.calendarIdentifier) }
+                        ForEach(calendars, id: \.id) { Text($0.title).tag($0.id) }
                     }
                 }
                 Toggle("All day", isOn: $allDay)
@@ -377,18 +427,21 @@ private struct EventEditor: View {
             if let error { Text(error).foregroundStyle(.red) }
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                Button("Save Event") { submit() }.keyboardShortcut(.defaultAction)
-                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                if saving { ProgressView().controlSize(.small) }
+                Button("Cancel", role: .cancel) { dismiss() }.disabled(saving)
+                Button("Save Event") { Task { await submit() } }.keyboardShortcut(.defaultAction)
+                    .disabled(saving || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                               || (!isDemo && destination.isEmpty))
             }
         }
         .padding(23)
         .frame(width: 430)
+        .interactiveDismissDisabled(saving)
         .onChange(of: start) { previous, new in end = end.addingTimeInterval(new.timeIntervalSince(previous)) }
     }
 
-    private func submit() {
+    private func submit() async {
+        guard !saving else { return }
         let calendar = Calendar.current
         let begins = allDay ? calendar.startOfDay(for: start) : start
         let finishes = allDay ? (calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: end)) ?? end) : end
@@ -396,8 +449,10 @@ private struct EventEditor: View {
             error = "The end must be after the start."
             return
         }
+        saving = true
+        defer { saving = false }
         do {
-            try save(EventValues(title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            try await save(EventValues(title: title.trimmingCharacters(in: .whitespacesAndNewlines),
                                  start: begins, end: finishes, allDay: allDay,
                                  calendarID: destination, location: location, notes: notes))
             dismiss()

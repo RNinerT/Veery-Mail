@@ -175,15 +175,18 @@ public enum SnoozePresets {
     }
 }
 
-/// OAuth tokens in the Keychain (one device-only item).
+/// OAuth tokens in a device-only Keychain item.
 public struct KeychainTokenStore: TokenStore {
     public static let account = "oauth.fastmail"
-    public init() {}
+    private let item: String
+
+    public init(account: String = KeychainTokenStore.account) { item = account }
+
     public func load() -> OAuthTokens? {
-        Keychain.data(account: Self.account).flatMap { try? JSONDecoder().decode(OAuthTokens.self, from: $0) }
+        Keychain.data(account: item).flatMap { try? JSONDecoder().decode(OAuthTokens.self, from: $0) }
     }
     public func save(_ tokens: OAuthTokens) throws {
-        try Keychain.save(data: JSONEncoder().encode(tokens), account: Self.account)
+        try Keychain.save(data: JSONEncoder().encode(tokens), account: item)
     }
-    public func clear() { Keychain.delete(account: Self.account) }
+    public func clear() { Keychain.delete(account: item) }
 }

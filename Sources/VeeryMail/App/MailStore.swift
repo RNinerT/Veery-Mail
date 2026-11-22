@@ -103,6 +103,10 @@ final class MailStore {
     var workspace = MailWorkspace.mail
     var newContact: ContactDraft?
     var newEvent: EventDraft?
+    private(set) var fastmailCalendar: FastmailCalendar?
+    private var oauthCredentials: OAuthCredentials?
+    private var calendarCredentials: OAuthCredentials?
+    private var signingOut = false
     private var calendarLinks: [String: String] = [:]
     var pendingPermanentDelete: PendingPermanentDelete?
     var signOutReview: SignOutReview?
@@ -201,12 +205,70 @@ final class MailStore {
 
     /// After "Sign in with Fastmail" completes.
     func startOAuth(tokens: OAuthTokens, metadata: OAuthServerMetadata) {
+        let nextGeneration = generation + 1
         let credentials = OAuthCredentials(
             tokens: tokens, metadata: metadata, oauth: FastmailOAuth(), store: KeychainTokenStore(),
             onSignedOut: { [weak self] error in
-                Task { @MainActor in self?.authorizationExpired(error) }
+                Task { @MainActor in
+                    guard let self, self.isLive(nextGeneration) else { return }
+                    self.authorizationExpired(error)
+                }
             })
         start(credentials: credentials, method: .oauth, persistToken: nil)
+        oauthCredentials = credentials
+        fastmailCalendar = tokens.calendarResource.map { _ in FastmailCalendar(credentials: credentials) }
+    }
+
+    /// A calendar grant must authenticate to the exact mailbox already open in Veery.
+    func authorizeCalendar(tokens: OAuthTokens, metadata: OAuthServerMetadata, generation expectedGeneration: Int,
+                           account expectedAccount: String) async throws {
+        let verification = JMAPClient(credentials: StaticTokenCredentials(token: tokens.accessToken),
+                                      transport: NoRedirectTransport())
+        try await verification.connect()
+        guard verification.accountKey == expectedAccount else {
+            throw JMAPError.unsupported("Choose the same Fastmail account you use for mail in Veery.")
+        }
+        // Confirm CalDAV accepts the grant before replacing working mail credentials.
+        let candidate = OAuthCredentials(tokens: tokens, metadata: metadata, oauth: FastmailOAuth(),
+                                         store: ValidationTokenStore(), onSignedOut: { _ in })
+        _ = try await FastmailCalendar(credentials: candidate).calendars()
+        let verifiedGrant = await candidate.current()
+        try Task.checkCancellation()
+        guard isLive(expectedGeneration), accountKey == expectedAccount, phase == .ready, !signingOut else {
+            throw CancellationError()
+        }
+
+        if let oauthCredentials {
+            try await oauthCredentials.replaceGrant(verifiedGrant, metadata: metadata)
+            guard isLive(expectedGeneration), !signingOut else { return }
+            AuthStore.saveMetadata(metadata)
+            fastmailCalendar = FastmailCalendar(credentials: oauthCredentials)
+        } else {
+            if let calendarCredentials {
+                try await calendarCredentials.replaceGrant(verifiedGrant, metadata: metadata)
+                guard isLive(expectedGeneration), !signingOut else { return }
+                AuthStore.saveMetadata(metadata, calendarOnly: true)
+            } else {
+                try AuthStore.saveOAuth(tokens: verifiedGrant, metadata: metadata, calendarOnly: true)
+                defaults.set(expectedAccount, forKey: "oauth.calendar.accountKey")
+                attachCalendar(tokens: verifiedGrant, metadata: metadata)
+            }
+        }
+    }
+
+    private func attachCalendar(tokens: OAuthTokens, metadata: OAuthServerMetadata) {
+        let gen = generation
+        let credentials = OAuthCredentials(
+            tokens: tokens, metadata: metadata, oauth: FastmailOAuth(), store: AuthStore.calendarTokenStore,
+            onSignedOut: { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, self.isLive(gen), self.authMethod == .developerToken else { return }
+                    self.calendarCredentials = nil
+                    self.fastmailCalendar = nil
+                }
+            })
+        calendarCredentials = credentials
+        fastmailCalendar = FastmailCalendar(credentials: credentials)
     }
 
     private func start(credentials: CredentialProvider, method: AuthMethod, persistToken: String?) {
@@ -243,6 +305,11 @@ final class MailStore {
                     adoptAccount(key, paintFromCache: false)
                 }
                 defaults.set(key, forKey: "lastAccountKey")
+                if authMethod == .developerToken, fastmailCalendar == nil,
+                   defaults.string(forKey: "oauth.calendar.accountKey") == key,
+                   let saved = AuthStore.loadOAuth(calendarOnly: true), saved.tokens.calendarResource != nil {
+                    attachCalendar(tokens: saved.tokens, metadata: saved.metadata)
+                }
                 if let persistToken { try Keychain.save(token: persistToken) }
                 async let boxes = client.mailboxes()
                 async let ids = client.identities()
@@ -313,7 +380,12 @@ final class MailStore {
     /// Cancels all background work and forgets everything derived from the current account.
     private func resetAccountState(keepConnection: Bool = false) {
         for task in [pushTask, refreshTask, listTask, threadTask] { task?.cancel() }
-        if !keepConnection { connectTask?.cancel() }
+        if !keepConnection {
+            connectTask?.cancel()
+            oauthCredentials = nil
+            calendarCredentials = nil
+            fastmailCalendar = nil
+        }
         pushTask = nil; refreshTask = nil; listTask = nil; threadTask = nil
         snoozeTimer?.invalidate(); snoozeTimer = nil
         outbox.shutdown()
@@ -355,6 +427,9 @@ final class MailStore {
     ///   Mac so signing back in to the same account returns it on time.
     /// - Open compose windows are saved as drafts and closed.
     func performSignOut(sendUnsent: Bool, returnSnoozed: Bool) async {
+        guard !signingOut else { return }
+        signingOut = true
+        defer { signingOut = false }
         let gen = generation
         if sendUnsent {
             for item in outbox.items where item.state == .held || item.isInUndoWindow { outbox.sendNow(item.id) }
@@ -367,10 +442,18 @@ final class MailStore {
             closeComposer(id)
         }
         guard isLive(gen) else { return }
-        if authMethod == .oauth, let saved = AuthStore.loadOAuth() {
-            await FastmailOAuth().revoke(saved.tokens, metadata: saved.metadata)
+        if let oauthCredentials, let saved = AuthStore.loadOAuth() {
+            let latest = await oauthCredentials.endSession()
+            await FastmailOAuth().revoke(latest, metadata: saved.metadata)
         }
+        if let calendarCredentials, let saved = AuthStore.loadOAuth(calendarOnly: true) {
+            let latest = await calendarCredentials.endSession()
+            await FastmailOAuth().revoke(latest, metadata: saved.metadata)
+        }
+        guard isLive(gen) else { return }
         AuthStore.clearOAuth()
+        AuthStore.clearOAuth(calendarOnly: true)
+        defaults.removeObject(forKey: "oauth.calendar.accountKey")
         Keychain.delete()
         cache.clear()
         if let key = accountKey {
@@ -927,23 +1010,44 @@ struct NullOutboxStorage: OutboxStorage {
     func save(_ items: [OutboxItem]) throws {}
 }
 
+/// Candidate grants stay in memory until both Fastmail endpoints verify them.
+private struct ValidationTokenStore: TokenStore {
+    func load() -> OAuthTokens? { nil }
+    func save(_ tokens: OAuthTokens) throws {}
+    func clear() {}
+}
+
 /// Saved OAuth sign-in: tokens in the Keychain, server metadata (not secret) in preferences.
 enum AuthStore {
-    static func loadOAuth() -> (tokens: OAuthTokens, metadata: OAuthServerMetadata)? {
-        guard let tokens = KeychainTokenStore().load(),
-              let data = UserDefaults.standard.data(forKey: "oauth.metadata"),
+    static let calendarTokenStore = KeychainTokenStore(account: "oauth.fastmail.calendar")
+
+    static func loadOAuth(calendarOnly: Bool = false) -> (tokens: OAuthTokens, metadata: OAuthServerMetadata)? {
+        guard let tokens = tokenStore(calendarOnly).load(),
+              let data = UserDefaults.standard.data(forKey: metadataKey(calendarOnly)),
               let metadata = try? JSONDecoder().decode(OAuthServerMetadata.self, from: data) else { return nil }
         return (tokens, metadata)
     }
 
-    static func saveOAuth(tokens: OAuthTokens, metadata: OAuthServerMetadata) throws {
-        try KeychainTokenStore().save(tokens)
-        UserDefaults.standard.set(try JSONEncoder().encode(metadata), forKey: "oauth.metadata")
+    static func saveOAuth(tokens: OAuthTokens, metadata: OAuthServerMetadata, calendarOnly: Bool = false) throws {
+        try tokenStore(calendarOnly).save(tokens)
+        saveMetadata(metadata, calendarOnly: calendarOnly)
     }
 
-    static func clearOAuth() {
-        KeychainTokenStore().clear()
-        UserDefaults.standard.removeObject(forKey: "oauth.metadata")
+    static func saveMetadata(_ metadata: OAuthServerMetadata, calendarOnly: Bool = false) {
+        UserDefaults.standard.set(try? JSONEncoder().encode(metadata), forKey: metadataKey(calendarOnly))
+    }
+
+    static func clearOAuth(calendarOnly: Bool = false) {
+        tokenStore(calendarOnly).clear()
+        UserDefaults.standard.removeObject(forKey: metadataKey(calendarOnly))
+    }
+
+    private static func metadataKey(_ calendarOnly: Bool) -> String {
+        calendarOnly ? "oauth.calendar.metadata" : "oauth.metadata"
+    }
+
+    private static func tokenStore(_ calendarOnly: Bool) -> KeychainTokenStore {
+        calendarOnly ? calendarTokenStore : KeychainTokenStore()
     }
 }
 

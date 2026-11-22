@@ -291,3 +291,50 @@ final class MailVolumeTests: XCTestCase {
         XCTAssertEqual(v?.thisWeek, 15); XCTAssertEqual(v?.lastWeek, 16)
     }
 }
+
+extension ContactsTests {
+    func testEditingPatchesOnlyChangedFieldsAndUsesCardState() async throws {
+        let (client, transport) = try await makeClient { calls in
+            let id = calls[0][2] as! String
+            if calls[0][0] as? String == "ContactCard/get" {
+                return [["ContactCard/get", ["state": "contact-state", "list": [[
+                    "id": "c1", "name": ["full": "Robin"],
+                    "emails": ["a/b": ["address": "old@example.com", "contexts": ["work": true]]],
+                    "phones": ["work": ["number": "555-0141"]],
+                    "organizations": ["0": ["name": "Studio"]],
+                ]]], id]]
+            }
+            return [["ContactCard/set", ["updated": ["c1": NSNull()]], id]]
+        }
+        let original = try await client.contactForEditing("c1")
+        var edited = original
+        edited.name = "Robin Finch"
+        edited.emails[0].value = "new@example.com"
+        edited.phones.removeAll()
+        edited.notes.append(.init(id: "first", value: "Met at the studio"))
+        try await client.updateContact(original, with: edited)
+        let call = (bodyJSON(try XCTUnwrap(transport.requests.last))["methodCalls"] as? [[Any]])?.first
+        let args = try XCTUnwrap(call?[1] as? [String: Any])
+        let update = try XCTUnwrap((args["update"] as? [String: [String: Any]])?["c1"])
+        XCTAssertEqual(args["ifInState"] as? String, "contact-state")
+        XCTAssertEqual(Set(update.keys), ["name/full", "emails/a~1b/address", "phones/work", "notes"])
+        XCTAssertEqual(update["emails/a~1b/address"] as? String, "new@example.com")
+        XCTAssertTrue(update["phones/work"] is NSNull)
+        XCTAssertEqual((update["notes"] as? [String: [String: String]])?["first"]?["note"], "Met at the studio")
+    }
+
+    func testEditingRejectsConcurrentChanges() async throws {
+        let original = ContactEdit(card: ["id": "c1", "name": ["full": "Robin"]], state: "old")
+        var edited = original
+        edited.name = "Robin Finch"
+        let (client, _) = try await makeClient { calls in
+            [["error", ["type": "stateMismatch"], calls[0][2]]]
+        }
+        do {
+            try await client.updateContact(original, with: edited)
+            XCTFail("Expected Fastmail's state mismatch to stop the save")
+        } catch JMAPError.setFailed(let message) {
+            XCTAssertTrue(message.contains("changed while you were editing"))
+        }
+    }
+}

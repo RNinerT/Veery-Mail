@@ -803,10 +803,58 @@ public final class JMAPClient: @unchecked Sendable {
         try await contactObjects(includeDetails: true).compactMap(SavedContact.init)
     }
 
+    public func contactAddressBooks() async throws -> [ContactAddressBook] {
+        guard let account = contactsAccountId else { return [] }
+        let result = try await call([
+            Invocation("AddressBook/get", ["accountId": account, "ids": NSNull(),
+                                           "properties": ["id", "name", "isDefault", "myRights"]], id: "b"),
+        ], using: [JMAPCapability.contacts])
+        guard let books = try response(result, "b", "AddressBook/get").args["list"] as? [[String: Any]] else {
+            throw JMAPError.decoding("Fastmail address books were missing.")
+        }
+        return books.compactMap(ContactAddressBook.init).sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+
+    public func contactForEditing(_ id: String) async throws -> ContactEdit {
+        guard let account = contactsAccountId else { throw JMAPError.unsupported("Fastmail contacts access is required.") }
+        let result = try await call([
+            Invocation("ContactCard/get", ["accountId": account, "ids": [id],
+                       "properties": ["id", "name", "emails", "phones", "organizations", "notes"]], id: "c")
+        ], using: [JMAPCapability.contacts])
+        let args = try response(result, "c", "ContactCard/get").args
+        guard let state = args["state"] as? String, let card = (args["list"] as? [[String: Any]])?.first else {
+            throw JMAPError.setFailed("This contact is no longer available. Refresh Contacts and try again.")
+        }
+        return ContactEdit(card: card, state: state)
+    }
+
+    public func updateContact(_ original: ContactEdit, with changes: ContactEdit) async throws {
+        guard let account = contactsAccountId, let id = original.contactID, let state = original.state else {
+            throw JMAPError.unsupported("Fastmail contacts access is required.")
+        }
+        let patch = original.patch(to: changes)
+        guard !patch.isEmpty else { return }
+        do {
+            let result = try await call([
+                Invocation("ContactCard/set", ["accountId": account, "ifInState": state,
+                                              "update": [id: patch]], id: "c")
+            ], using: [JMAPCapability.contacts])
+            let reply = try response(result, "c", "ContactCard/set")
+            try reply.checkSet()
+            guard (reply.args["updated"] as? [String: Any])?[id] != nil else {
+                throw JMAPError.setFailed("Fastmail couldn’t confirm that this contact was saved.")
+            }
+        } catch JMAPError.method("stateMismatch", _) {
+            throw JMAPError.setFailed("Your Fastmail contacts changed while you were editing. Reopen this contact to edit the latest version.")
+        }
+    }
+
     private func contactObjects(includeDetails: Bool = false) async throws -> [[String: Any]] {
         guard let account = contactsAccountId else { return [] }
         var properties = ["id", "name", "emails"]
-        if includeDetails { properties += ["phones", "organizations", "kind"] }
+        if includeDetails { properties += ["phones", "organizations", "kind", "addressBookIds", "notes"] }
         let r = try await call([
             Invocation("ContactCard/get", ["accountId": account, "ids": NSNull(),
                                            "properties": properties], id: "c"),
@@ -819,23 +867,20 @@ public final class JMAPClient: @unchecked Sendable {
     }
 
     public func addContact(_ address: EmailAddress) async throws -> String {
+        try await createContact(ContactEdit(name: address.displayName, email: address.email))
+    }
+
+    public func createContact(_ values: ContactEdit, addressBookID: String? = nil) async throws -> String {
         guard let account = contactsAccountId else { throw JMAPError.unsupported("Fastmail contacts access is required.") }
-        let result = try await call([
-            Invocation("AddressBook/get", ["accountId": account, "ids": NSNull(),
-                                           "properties": ["id", "isDefault", "myRights"]], id: "b"),
-        ], using: [JMAPCapability.contacts])
-        let books = try response(result, "b", "AddressBook/get").args["list"] as? [[String: Any]] ?? []
-        let defaultBook = books.first { $0["isDefault"] as? Bool == true }
-        guard (defaultBook?["myRights"] as? [String: Any])?["mayWrite"] as? Bool == true,
-              let book = defaultBook?["id"] as? String else {
-            throw JMAPError.unsupported("Choose a writable default address book in Fastmail before adding a contact.")
-        }
-        let card: [String: Any] = [
-            "@type": "Card", "version": "1.0", "uid": UUID().uuidString,
-            "addressBookIds": [book: true],
-            "name": ["full": address.displayName],
-            "emails": ["main": ["address": address.email]],
-        ]
+        let books = try await contactAddressBooks().filter(\.canWrite)
+        let book = addressBookID.flatMap { id in books.first { $0.id == id } }
+            ?? (addressBookID == nil ? (books.first(where: \.isDefault) ?? books.first) : nil)
+        guard let book else { throw JMAPError.unsupported("Choose a writable Fastmail address book.") }
+        var card = ContactEdit().patch(to: values)
+        card["@type"] = "Card"
+        card["version"] = "1.0"
+        card["uid"] = UUID().uuidString
+        card["addressBookIds"] = [book.id: true]
         let results = try await call([
             Invocation("ContactCard/set", ["accountId": account, "create": ["new": card]], id: "c"),
         ], using: [JMAPCapability.contacts])
@@ -961,13 +1006,18 @@ public struct SavedContact: Identifiable, Sendable {
     public let emails: [EmailAddress]
     public let phones: [String]
     public let organizations: [String]
+    public let addressBookIDs: Set<String>
+    public let notes: [String]
 
-    public init(id: String, name: String, emails: [EmailAddress], phones: [String] = [], organizations: [String] = []) {
+    public init(id: String, name: String, emails: [EmailAddress], phones: [String] = [], organizations: [String] = [],
+                addressBookIDs: Set<String> = [], notes: [String] = []) {
         self.id = id
         self.name = name
         self.emails = emails
         self.phones = phones
         self.organizations = organizations
+        self.addressBookIDs = addressBookIDs
+        self.notes = notes
     }
 
     init?(_ card: [String: Any]) {
@@ -978,6 +1028,8 @@ public struct SavedContact: Identifiable, Sendable {
         self.emails = emails
         self.organizations = organizations
         self.phones = Self.values(card["phones"], field: "number")
+        self.addressBookIDs = Set((card["addressBookIds"] as? [String: Bool] ?? [:]).filter { $0.value }.keys)
+        self.notes = Self.values(card["notes"], field: "note")
         self.name = ContactCards.displayName(card["name"] as? [String: Any])
             ?? organizations.first ?? emails.first?.email ?? "Unnamed Contact"
     }
