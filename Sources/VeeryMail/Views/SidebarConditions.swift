@@ -95,20 +95,18 @@ struct WeekVolume: View {
         let pairs = volume.pairs
         let peak = CGFloat(volume.peak)
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("\(volume.thisWeek)")
-                    .font(.system(size: 15, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Theme.text)
-                    .contentTransition(.numericText())
-                Text("new this week")
-                    .font(Theme.Typeface.meta)
-                    .foregroundStyle(Theme.secondaryText)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                    .layoutPriority(-1)
-                Spacer(minLength: 4)
-                TrendChip(trend: volume.trend, lastWeek: volume.lastWeek)
-                    .fixedSize()
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text("\(volume.thisWeek)")
+                        .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Theme.text)
+                        .contentTransition(.numericText())
+                    Text("new this week")
+                        .font(Theme.Typeface.meta)
+                        .foregroundStyle(Theme.secondaryText)
+                        .lineLimit(1)
+                }
+                TrendLine(trend: volume.trend, lastWeek: volume.lastWeek)
             }
 
             HStack(alignment: .bottom, spacing: 0) {
@@ -169,31 +167,28 @@ struct WeekVolume: View {
     }
 }
 
-/// "▲ 12%" against last week. Neutral colours: more or less mail isn't good or bad.
-struct TrendChip: View {
+/// "↑ 21% more than last week", in neutral colours: more or less mail isn't good or bad.
+struct TrendLine: View {
     let trend: MailVolume.Trend
     let lastWeek: Int
 
     var body: some View {
-        let (symbol, text, spoken): (String?, String, String) = {
+        let (symbol, text): (String?, String) = {
             switch trend {
-            case .up(let p): return ("arrow.up", "\(p)%", "\(p) percent more than last week")
-            case .down(let p): return ("arrow.down", "\(p)%", "\(p) percent less than last week")
-            case .same: return (nil, "Same", "about the same as last week")
-            case .noHistory: return (nil, "New", "no mail the week before")
+            case .up(let p): return ("arrow.up.right", "\(p)% more than last week")
+            case .down(let p): return ("arrow.down.right", "\(p)% less than last week")
+            case .same: return ("equal", "About the same as last week")
+            case .noHistory: return (nil, "No mail the week before")
             }
         }()
-        HStack(spacing: 2) {
+        HStack(spacing: 3) {
             if let symbol { Image(systemName: symbol).font(.system(size: 8.5, weight: .bold)) }
-            Text(text)
+            Text(text).lineLimit(1).minimumScaleFactor(0.85)
         }
-        .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+        .font(.system(size: 10.5, weight: .medium).monospacedDigit())
         .foregroundStyle(Theme.secondaryText)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(Theme.secondaryText.opacity(0.12), in: Capsule())
-        .help("Last 7 days compared with the 7 days before (\(lastWeek) new)")
-        .accessibilityLabel(spoken)
+        .help("Last 7 days compared with the 7 days before, when \(lastWeek) new messages arrived")
+        .accessibilityElement(children: .combine)
     }
 }
 
