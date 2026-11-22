@@ -33,10 +33,14 @@ public struct MailVolume: Equatable, Sendable {
 
     public var pairs: [Pair] {
         guard days.count == 14 else { return [] }
-        return (0..<7).map { i in
-            Pair(day: days[7 + i].start, count: days[7 + i].count,
-                 previousDay: days[i].start, previousCount: days[i].count, isToday: i == 6)
+        var out: [Pair] = []
+        for i in 0..<7 {
+            let current: Day = days[7 + i]
+            let previous: Day = days[i]
+            out.append(Pair(day: current.start, count: current.count,
+                            previousDay: previous.start, previousCount: previous.count, isToday: i == 6))
         }
+        return out
     }
 
     /// The tallest bar, so both weeks share one scale.
