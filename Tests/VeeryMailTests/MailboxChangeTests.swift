@@ -243,17 +243,17 @@ final class MailVolumeTests: XCTestCase {
     func testPairsTrendAndPeak() throws {
         let now = calendar.date(from: DateComponents(year: 2026, month: 11, day: 22, hour: 15))!
         let w = MailVolume.windows(now: now, calendar: calendar)
-        let counts = [5, 6, 7, 8, 9, 10, 11, 12, 6, 8, 9, 10, 12, 3] + [60, 50]
+        let counts: [Int] = [5, 6, 7, 8, 9, 10, 11, 12, 6, 8, 9, 10, 12, 3, 60, 50]
         let v = try XCTUnwrap(MailVolume.from(counts: counts, windows: w))
         XCTAssertEqual(v.pairs.count, 7)
         XCTAssertEqual(v.pairs[0].count, 12); XCTAssertEqual(v.pairs[0].previousCount, 5)
         XCTAssertTrue(v.pairs[6].isToday); XCTAssertEqual(v.pairs[6].count, 3)
         XCTAssertEqual(calendar.dateComponents([.day], from: v.pairs[2].previousDay, to: v.pairs[2].day).day, 7)
         XCTAssertEqual(v.peak, 12)
-        XCTAssertEqual(v.trend, .up(20))
-        XCTAssertEqual(MailVolume(days: [], thisWeek: 48, lastWeek: 50).trend, .same)
-        XCTAssertEqual(MailVolume(days: [], thisWeek: 30, lastWeek: 60).trend, .down(50))
-        XCTAssertEqual(MailVolume(days: [], thisWeek: 4, lastWeek: 0).trend, .noHistory)
+        XCTAssertEqual(v.trend, MailVolume.Trend.up(20))
+        XCTAssertEqual(MailVolume(days: [], thisWeek: 48, lastWeek: 50).trend, MailVolume.Trend.same)
+        XCTAssertEqual(MailVolume(days: [], thisWeek: 30, lastWeek: 60).trend, MailVolume.Trend.down(50))
+        XCTAssertEqual(MailVolume(days: [], thisWeek: 4, lastWeek: 0).trend, MailVolume.Trend.noHistory)
         XCTAssertNil(MailVolume.from(counts: [1, 2], windows: w))
     }
 
