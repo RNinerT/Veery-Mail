@@ -492,6 +492,7 @@ struct GeneralSettings: View {
 
 struct MessageListSettings: View {
     private var f = ListFormatStorage()
+    @AppStorage("list.quickActions") private var quickActions = true
     @State private var element: ListFormat.Element = .sender
 
     private var unreadDotColor: Binding<Color> {
@@ -533,6 +534,8 @@ struct MessageListSettings: View {
                     }
                     .pickerStyle(.segmented)
                     Toggle("Show sender avatars", isOn: f.$showAvatars)
+                    Toggle("Show quick actions when the pointer rests on a message", isOn: $quickActions)
+                        .help("Archive, Trash, Read/Unread and Snooze buttons over the date")
                     Toggle("Show unread dot", isOn: f.$showUnreadDot)
                     LabeledContent("Unread dot color") {
                         HStack {

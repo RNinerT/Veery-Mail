@@ -240,6 +240,11 @@ struct InboxRow: View {
     let isSelected: Bool
     let isCursor: Bool
     @State private var hovering = false
+    /// Quick actions appear only after the pointer rests on a row, so an ordinary click always
+    /// opens the message instead of landing on a button that appeared under the pointer.
+    @State private var showQuickActions = false
+    @State private var hoverTask: Task<Void, Never>?
+    @AppStorage("list.quickActions") private var quickActionsEnabled = true
 
     private var fill: Color {
         if isOpen { return Theme.accent.opacity(0.16) }
@@ -274,11 +279,24 @@ struct InboxRow: View {
                         .padding(.trailing, Theme.Space.m)
                 }
             }
-            .overlay(alignment: .bottomTrailing) {
-                if hovering { quickActions }
+            // Over the date on the first line, not over the preview text people click to open mail.
+            .overlay(alignment: .topTrailing) {
+                if showQuickActions && quickActionsEnabled { quickActions }
             }
             .contentShape(Rectangle())
-            .onHover { hovering = $0 }
+            .onHover { inside in
+                hovering = inside
+                hoverTask?.cancel()
+                if inside {
+                    hoverTask = Task {
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        if !Task.isCancelled { showQuickActions = true }
+                    }
+                } else {
+                    showQuickActions = false
+                }
+            }
+            .onDisappear { hoverTask?.cancel(); showQuickActions = false }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(accessibilitySummary)
             .accessibilityAddTraits(isOpen || isSelected ? [.isButton, .isSelected] : .isButton)
@@ -311,7 +329,9 @@ struct InboxRow: View {
         .padding(.vertical, 2)
         .background(Theme.card, in: Capsule())
         .overlay(Capsule().strokeBorder(Theme.rim))
-        .padding(5)
+        .padding(.top, 3)
+        .padding(.trailing, Theme.Space.s)
+        .transition(.opacity)
     }
 
     private func quick(_ icon: String, _ help: String, action: @escaping () -> Void) -> some View {

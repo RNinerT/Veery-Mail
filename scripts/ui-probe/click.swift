@@ -1,4 +1,4 @@
-// Posts synthetic mouse events for UI probing in CI. Usage: swift click.swift x y [dx dy]
+// Posts synthetic mouse events for UI probing in CI. Usage: click x y [dx dy [dwell-seconds]]
 import CoreGraphics
 import Foundation
 
@@ -10,7 +10,7 @@ func post(_ type: CGEventType, _ p: CGPoint) {
     usleep(30_000)
 }
 post(.mouseMoved, start)
-usleep(150_000)
+usleep(useconds_t((args.count > 4 ? args[4] : 0.15) * 1_000_000))
 post(.leftMouseDown, start)
 if end != start { post(.leftMouseDragged, end) }
 post(.leftMouseUp, end)

@@ -20,13 +20,11 @@ jobs:
           swiftc -O scripts/ui-probe/click.swift -o click
           shot() { sleep 1.2; screencapture -x "probe-$1.png"; }
           shot 0-start
-          ./click 360 226; shot 1-imani-name
-          ./click 520 395; shot 2-mateo-right
-          ./click 360 527 3 1; shot 3-priya-wobble
-          ./click 450 340; shot 4-shelf-middle
-          ./click 360 461; ./click 360 395; shot 5-rapid-north-then-mateo
-          ./click 540 244; shot 6-imani-preview-right
-          sleep 3; shot 7-after-wait
+          ./click 360 226; shot 1-imani
+          ./click 360 356; shot 2-mateo
+          ./click 540 244 0 0 1.5; shot 3-imani-preview-right-after-resting
+          ./click 540 373 0 0 1.5; shot 4-mateo-preview-right-after-resting
+          ./click 470 290 0 0 1.5; shot 5-shelf-hover-shows-actions-over-date
       - uses: actions/upload-artifact@v4
         if: always()
         with:
