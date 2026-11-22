@@ -9,6 +9,7 @@ public struct SearchQuery: Equatable {
     public var from: [String] = []
     public var to: [String] = []
     public var cc: [String] = []
+    public var correspondents: [String] = []
     public var subject: [String] = []
     public var body: [String] = []
     public var hasAttachment: Bool?
@@ -35,6 +36,7 @@ public struct SearchQuery: Equatable {
             case "from": q.from.append(value)
             case "to": q.to.append(value)
             case "cc": q.cc.append(value)
+            case "with": q.correspondents.append(value)
             case "subject": q.subject.append(value)
             case "body": q.body.append(value)
             case "in", "folder", "mailbox": q.mailbox = value
@@ -69,6 +71,12 @@ public struct SearchQuery: Equatable {
         add("from", from)
         add("to", to)
         add("cc", cc)
+        if !correspondents.isEmpty {
+            let fields = correspondents.flatMap { address in
+                ["from", "to", "cc", "bcc"].map { [$0: address] }
+            }
+            conditions.append(["operator": "OR", "conditions": fields])
+        }
         add("subject", subject)
         add("body", body)
         if let hasAttachment { conditions.append(["hasAttachment": hasAttachment]) }

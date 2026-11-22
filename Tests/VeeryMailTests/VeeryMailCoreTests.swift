@@ -2,6 +2,19 @@ import XCTest
 @testable import VeeryMailCore
 
 final class SearchQueryTests: XCTestCase {
+    func testCorrespondenceSearchMatchesEitherDirectionAndKeepsMailboxExclusions() throws {
+        let query = SearchQuery.parse("with:one@example.com with:two@example.com")
+        let filter = query.filter(defaultMailboxId: nil, excludedMailboxIds: ["trash"]) { _ in nil }
+        XCTAssertEqual(filter["operator"] as? String, "AND")
+        let conditions = try XCTUnwrap(filter["conditions"] as? [[String: Any]])
+        XCTAssertEqual(conditions[0]["operator"] as? String, "OR")
+        let fields = try XCTUnwrap(conditions[0]["conditions"] as? [[String: String]])
+        XCTAssertEqual(fields.count, 8)
+        XCTAssertTrue(fields.contains(["from": "one@example.com"]))
+        XCTAssertTrue(fields.contains(["to": "two@example.com"]))
+        XCTAssertEqual(conditions[1]["inMailboxOtherThan"] as? [String], ["trash"])
+    }
+
     func testParsesOperatorsAndFreeText() {
         let q = SearchQuery.parse(#"from:alice subject:"q3 plan" has:attachment is:unread budget"#)
         XCTAssertEqual(q.from, ["alice"])

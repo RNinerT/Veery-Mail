@@ -9,6 +9,7 @@ enum ListSource: Hashable {
     case flagged
     case unread
     case search(String)
+    case linkedMessage(String)
 }
 
 struct Toast: Identifiable {
@@ -99,6 +100,10 @@ final class MailStore {
     var showCommandPalette = false
     var showMaskedEmail = false
     var searchText = ""
+    var workspace = MailWorkspace.mail
+    var newContact: ContactDraft?
+    var newEvent: EventDraft?
+    private var calendarLinks: [String: String] = [:]
     var pendingPermanentDelete: PendingPermanentDelete?
     var signOutReview: SignOutReview?
 
@@ -295,6 +300,7 @@ final class MailStore {
         snoozeStorage = isDemo ? nil : snoozeStore
         snoozeRecords = isDemo ? [] : snoozeStore.load()
         contacts = cache.load([EmailAddress].self, "contacts") ?? []
+        calendarLinks = cache.load([String: String].self, "calendarLinks") ?? [:]
         guard paintFromCache, let cachedBoxes = cache.load([Mailbox].self, "mailboxes"), !cachedBoxes.isEmpty else { return }
         mailboxes = cachedBoxes
         if let inbox = mailbox(role: "inbox") {
@@ -319,6 +325,10 @@ final class MailStore {
         statsRefreshedAt = .distantPast; metaRefreshedAt = .distantPast
         notifiedIds = []; snoozeRecords = []; snoozeStorage = nil
         pendingPermanentDelete = nil
+        newContact = nil
+        newEvent = nil
+        calendarLinks = [:]
+        workspace = .mail
         accountKey = nil
         BodyCache.clear()
         ai.clearAccountState()
@@ -414,6 +424,7 @@ final class MailStore {
         case .flagged: return "Flagged"
         case .unread: return "Unread"
         case .search(let q): return "Search: \(q)"
+        case .linkedMessage: return "Conversation"
         }
     }
 
@@ -457,7 +468,18 @@ final class MailStore {
         openedRowId = nil
         thread = []
         if isDemo {
-            messages = currentMailboxId == mailbox(role: "inbox")?.id ? demoMessages : []
+            if case .linkedMessage(let id) = source {
+                messages = demoMessages.filter { $0.id == id }
+                selection = Set(messages.map(\.id))
+                selectionChanged()
+            } else if case .search(let query) = source, !SearchQuery.parse(query).correspondents.isEmpty {
+                let emails = Set(SearchQuery.parse(query).correspondents.map { $0.lowercased() })
+                messages = demoMessages.filter {
+                    (($0.from ?? []) + ($0.to ?? [])).contains { emails.contains($0.email.lowercased()) }
+                }
+            } else {
+                messages = currentMailboxId == mailbox(role: "inbox")?.id ? demoMessages : []
+            }
             return
         }
         if case .mailbox(let id) = source {
@@ -482,6 +504,7 @@ final class MailStore {
             var f: [String: Any] = ["notKeyword": "$seen"]
             if let inbox = mailbox(role: "inbox") { f["inMailbox"] = inbox.id }
             return f
+        case .linkedMessage: return [:]
         case .search(let text):
             let q = SearchQuery.parse(text)
             return q.filter(defaultMailboxId: nil, excludedMailboxIds: excludedFromSearch) { name in
@@ -505,6 +528,17 @@ final class MailStore {
         listTask = Task {
             defer { if self.listRequest == req { self.isLoadingList = false } }
             do {
+                if case .linkedMessage(let id) = src {
+                    let linked = try await client.summaries(ids: [id])
+                    guard isLive(gen), listRequest == req, source == src, !Task.isCancelled else { return }
+                    messages = linked
+                    totalInSource = linked.count
+                    if selection.isEmpty {
+                        selection = Set(linked.map(\.id))
+                        selectionChanged()
+                    }
+                    return
+                }
                 let page = try await client.queryEmails(filter: filter, limit: limit)
                 guard isLive(gen), listRequest == req, source == src, !Task.isCancelled else { return }
                 messages = page.emails
@@ -629,13 +663,50 @@ final class MailStore {
 
     // MARK: Contacts
 
-    private func loadContacts(_ gen: Int) {
+    func loadContacts(_ gen: Int) {
         guard let client, defaults.object(forKey: "contacts.enabled") as? Bool ?? true else { return }
         Task {
             guard let list = try? await client.contacts(), isLive(gen) else { return }
             contacts = list
             cache.save(list, "contacts")
         }
+    }
+
+    func calendarMessage(for eventID: String) -> String? {
+        calendarLinks[eventID]
+    }
+
+    func linkCalendarEvent(_ eventID: String, to messageID: String) {
+        calendarLinks[eventID] = messageID
+        cache.save(calendarLinks, "calendarLinks")
+    }
+
+    func showLinkedMessage(_ id: String) {
+        source = .linkedMessage(id)
+        workspace = .mail
+    }
+
+    func findCorrespondence(_ addresses: [EmailAddress]) {
+        guard !addresses.isEmpty else { return }
+        let query = addresses.map { "with:\($0.email)" }.joined(separator: " ")
+        searchText = query
+        source = .search(query)
+        workspace = .mail
+    }
+
+    func recentCorrespondence(_ addresses: [EmailAddress]) async throws -> [EmailSummary] {
+        guard !addresses.isEmpty else { return [] }
+        if isDemo {
+            let emails = Set(addresses.map { $0.email.lowercased() })
+            return Array(demoMessages.filter { message in
+                ((message.from ?? []) + (message.to ?? [])).contains { emails.contains($0.email.lowercased()) }
+            }.prefix(6))
+        }
+        guard let client else { throw JMAPError.notConnected }
+        var query = SearchQuery()
+        query.correspondents = addresses.map(\.email)
+        let filter = query.filter(defaultMailboxId: nil, excludedMailboxIds: excludedFromSearch) { _ in nil }
+        return try await client.queryEmails(filter: filter, limit: 6).emails
     }
 
     // MARK: Reading

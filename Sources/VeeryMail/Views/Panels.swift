@@ -469,7 +469,7 @@ struct GeneralSettings: View {
             }
             Section("Contacts") {
                 Toggle("Suggest addresses from my Fastmail contacts", isOn: $contactsEnabled)
-                Text("Contacts are read from Fastmail and kept in memory only while Veery Mail is open.")
+                Text("The Contacts tab uses your Fastmail address book. Veery Mail caches names and email addresses on this Mac for suggestions.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Account") {

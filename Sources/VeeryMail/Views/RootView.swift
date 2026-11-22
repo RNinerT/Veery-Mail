@@ -13,14 +13,68 @@ struct RootView: View {
             ProgressView("Connecting to Fastmail…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         default:
-            MainView()
+            WorkspaceView()
+        }
+    }
+}
+
+enum MailWorkspace: String, CaseIterable {
+    case mail = "Mail", contacts = "Contacts", calendar = "Calendar"
+}
+
+struct WorkspaceView: View {
+    @Environment(MailStore.self) private var store
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        @Bindable var store = store
+        Group {
+            switch store.workspace {
+            case .mail: MainView()
+            case .contacts: ContactsView()
+            case .calendar: CalendarView()
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("Workspace", selection: $store.workspace) {
+                    ForEach(MailWorkspace.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+            }
+            if store.workspace != .mail {
+                ToolbarItem(placement: .navigation) {
+                    SettingsLink { Label("Settings", systemImage: "gearshape") }
+                }
+            }
+        }
+        .toolbarBackground(Theme.nav, for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
+        .sheet(item: $store.signOutReview) { review in SignOutReviewView(review: review) }
+        .onAppear {
+            if store.isDemo {
+                switch UserDefaults.standard.string(forKey: "uitest.workspace") {
+                case "contacts": store.workspace = .contacts
+                case "calendar": store.workspace = .calendar
+                default: break
+                }
+            }
+            // Compose windows are separate windows so they can be moved and kept beside the inbox.
+            store.openComposeWindow = { id in openWindow(id: "compose", value: id) }
+            let waiting = store.pendingComposeIds
+            store.pendingComposeIds = []
+            for id in waiting { openWindow(id: "compose", value: id) }
+            // Automated UI check (CI only): opens a compose window so the emoji picker can be exercised.
+            if UserDefaults.standard.bool(forKey: "uitest.openEmoji") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { store.compose() }
+            }
         }
     }
 }
 
 struct MainView: View {
     @Environment(MailStore.self) private var store
-    @Environment(\.openWindow) private var openWindow
     @State private var columns = NavigationSplitViewVisibility.all
 
     var body: some View {
@@ -108,17 +162,6 @@ struct MainView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             store.refreshIfStale()
         }
-        .onAppear {
-            // Compose windows are separate windows so they can be moved and kept beside the inbox.
-            store.openComposeWindow = { id in openWindow(id: "compose", value: id) }
-            let waiting = store.pendingComposeIds
-            store.pendingComposeIds = []
-            for id in waiting { openWindow(id: "compose", value: id) }
-            // Automated UI check (CI only): opens a compose window so the emoji picker can be exercised.
-            if UserDefaults.standard.bool(forKey: "uitest.openEmoji") {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { store.compose() }
-            }
-        }
         .confirmationDialog(permanentDeleteTitle, isPresented: Binding(
             get: { store.pendingPermanentDelete != nil },
             set: { if !$0 { store.pendingPermanentDelete = nil } }),
@@ -139,7 +182,6 @@ struct MainView: View {
         } message: { pending in
             Text(permanentDeleteMessage(pending))
         }
-        .sheet(item: $store.signOutReview) { review in SignOutReviewView(review: review) }
         .sheet(item: Binding(get: { store.ai.consent }, set: { if $0 == nil { store.ai.consent?.resume(false, false) } })) { request in
             AIConsentView(request: request)
         }

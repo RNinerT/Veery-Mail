@@ -791,14 +791,61 @@ public final class JMAPClient: @unchecked Sendable {
     /// Every name and address in the user's Fastmail address books. Empty when the session
     /// doesn't offer contacts (for example, a token without the contacts scope).
     public func contacts() async throws -> [EmailAddress] {
-        guard let s = session, s.capabilities[JMAPCapability.contacts] != nil,
-              let account = s.primaryAccounts[JMAPCapability.contacts] ?? s.mailAccountId else { return [] }
+        ContactCards.addresses(from: try await contactObjects())
+    }
+
+    public var contactsAccountId: String? {
+        guard let session, session.capabilities[JMAPCapability.contacts] != nil else { return nil }
+        return session.primaryAccounts[JMAPCapability.contacts] ?? session.mailAccountId
+    }
+
+    public func contactDirectory() async throws -> [SavedContact] {
+        try await contactObjects(includeDetails: true).compactMap(SavedContact.init)
+    }
+
+    private func contactObjects(includeDetails: Bool = false) async throws -> [[String: Any]] {
+        guard let account = contactsAccountId else { return [] }
+        var properties = ["id", "name", "emails"]
+        if includeDetails { properties += ["phones", "organizations", "kind"] }
         let r = try await call([
             Invocation("ContactCard/get", ["accountId": account, "ids": NSNull(),
-                                           "properties": ["id", "name", "emails"]], id: "c"),
+                                           "properties": properties], id: "c"),
         ], using: [JMAPCapability.contacts])
-        let list = (try response(r, "c", "ContactCard/get").args["list"] as? [[String: Any]]) ?? []
-        return ContactCards.addresses(from: list)
+        let response = try response(r, "c", "ContactCard/get")
+        guard let cards = response.args["list"] as? [[String: Any]] else {
+            throw JMAPError.decoding("Fastmail contacts were missing.")
+        }
+        return cards
+    }
+
+    public func addContact(_ address: EmailAddress) async throws -> String {
+        guard let account = contactsAccountId else { throw JMAPError.unsupported("Fastmail contacts access is required.") }
+        let result = try await call([
+            Invocation("AddressBook/get", ["accountId": account, "ids": NSNull(),
+                                           "properties": ["id", "isDefault", "myRights"]], id: "b"),
+        ], using: [JMAPCapability.contacts])
+        let books = try response(result, "b", "AddressBook/get").args["list"] as? [[String: Any]] ?? []
+        let defaultBook = books.first { $0["isDefault"] as? Bool == true }
+        guard (defaultBook?["myRights"] as? [String: Any])?["mayWrite"] as? Bool == true,
+              let book = defaultBook?["id"] as? String else {
+            throw JMAPError.unsupported("Choose a writable default address book in Fastmail before adding a contact.")
+        }
+        let card: [String: Any] = [
+            "@type": "Card", "version": "1.0", "uid": UUID().uuidString,
+            "addressBookIds": [book: true],
+            "name": ["full": address.displayName],
+            "emails": ["main": ["address": address.email]],
+        ]
+        let results = try await call([
+            Invocation("ContactCard/set", ["accountId": account, "create": ["new": card]], id: "c"),
+        ], using: [JMAPCapability.contacts])
+        let resultCard = try response(results, "c", "ContactCard/set")
+        try resultCard.checkSet()
+        let args = resultCard.args
+        guard let created = (args["created"] as? [String: [String: Any]])?["new"]?["id"] as? String else {
+            throw JMAPError.setFailed("Fastmail couldn’t save this contact.")
+        }
+        return created
     }
 
     // MARK: Plumbing
@@ -905,6 +952,39 @@ public struct FollowUpResult: Sendable, Equatable {
 
     public init(draftRemoved: Bool?, keywordSet: Bool?) {
         self.draftRemoved = draftRemoved; self.keywordSet = keywordSet
+    }
+}
+
+public struct SavedContact: Identifiable, Sendable {
+    public let id: String
+    public let name: String
+    public let emails: [EmailAddress]
+    public let phones: [String]
+    public let organizations: [String]
+
+    public init(id: String, name: String, emails: [EmailAddress], phones: [String] = [], organizations: [String] = []) {
+        self.id = id
+        self.name = name
+        self.emails = emails
+        self.phones = phones
+        self.organizations = organizations
+    }
+
+    init?(_ card: [String: Any]) {
+        guard let id = card["id"] as? String, card["kind"] as? String != "group" else { return nil }
+        let emails = ContactCards.addresses(from: [card])
+        let organizations = Self.values(card["organizations"], field: "name")
+        self.id = id
+        self.emails = emails
+        self.organizations = organizations
+        self.phones = Self.values(card["phones"], field: "number")
+        self.name = ContactCards.displayName(card["name"] as? [String: Any])
+            ?? organizations.first ?? emails.first?.email ?? "Unnamed Contact"
+    }
+
+    private static func values(_ object: Any?, field: String) -> [String] {
+        (object as? [String: [String: Any]] ?? [:]).sorted { $0.key < $1.key }
+            .compactMap { $0.value[field] as? String }
     }
 }
 
