@@ -103,8 +103,12 @@ struct WeekVolume: View {
                 Text("new this week")
                     .font(Theme.Typeface.meta)
                     .foregroundStyle(Theme.secondaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .layoutPriority(-1)
                 Spacer(minLength: 4)
                 TrendChip(trend: volume.trend, lastWeek: volume.lastWeek)
+                    .fixedSize()
             }
 
             HStack(alignment: .bottom, spacing: 0) {
@@ -132,8 +136,9 @@ struct WeekVolume: View {
             .animation(.easeOut(duration: 0.3), value: volume)
 
             HStack(spacing: 10) {
-                legend(Theme.text.opacity(0.7), "This week")
+                // Same order as each pair of bars: last week on the left.
                 legend(Theme.secondaryText.opacity(0.28), "Last week")
+                legend(Theme.text.opacity(0.7), "This week")
                 Spacer(minLength: 0)
             }
             .accessibilityHidden(true)
@@ -174,8 +179,8 @@ struct TrendChip: View {
             switch trend {
             case .up(let p): return ("arrow.up", "\(p)%", "\(p) percent more than last week")
             case .down(let p): return ("arrow.down", "\(p)%", "\(p) percent less than last week")
-            case .same: return (nil, "Same as last week", "about the same as last week")
-            case .noHistory: return (nil, "First week", "no mail the week before")
+            case .same: return (nil, "Same", "about the same as last week")
+            case .noHistory: return (nil, "New", "no mail the week before")
             }
         }()
         HStack(spacing: 2) {
