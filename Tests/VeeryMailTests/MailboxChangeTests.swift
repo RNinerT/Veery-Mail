@@ -220,3 +220,55 @@ final class EmojiCatalogTests: XCTestCase {
         XCTAssertTrue(EmojiCatalog.all.contains { $0.character == "😀" })
     }
 }
+
+final class MailVolumeTests: XCTestCase {
+    var calendar: Calendar = {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "America/New_York")!
+        return c
+    }()
+
+    func testWindowsAreFourteenDaysPlusTwoRollingWeeks() {
+        let now = calendar.date(from: DateComponents(year: 2026, month: 11, day: 22, hour: 15))!
+        let w = MailVolume.windows(now: now, calendar: calendar)
+        XCTAssertEqual(w.count, 16)
+        XCTAssertEqual(w[13].start, calendar.startOfDay(for: now), "last day is today")
+        XCTAssertEqual(w[13].end, now, "today is partial")
+        XCTAssertEqual(w[0].start, calendar.date(byAdding: .day, value: -13, to: calendar.startOfDay(for: now)))
+        for i in 0..<13 { XCTAssertEqual(w[i].end, w[i + 1].start, "days are contiguous") }
+        XCTAssertEqual(w[14].duration, 7 * 24 * 3600); XCTAssertEqual(w[14].end, now)
+        XCTAssertEqual(w[15].end, w[14].start)
+    }
+
+    func testPairsTrendAndPeak() throws {
+        let now = calendar.date(from: DateComponents(year: 2026, month: 11, day: 22, hour: 15))!
+        let w = MailVolume.windows(now: now, calendar: calendar)
+        let counts = [5, 6, 7, 8, 9, 10, 11, 12, 6, 8, 9, 10, 12, 3] + [60, 50]
+        let v = try XCTUnwrap(MailVolume.from(counts: counts, windows: w))
+        XCTAssertEqual(v.pairs.count, 7)
+        XCTAssertEqual(v.pairs[0].count, 12); XCTAssertEqual(v.pairs[0].previousCount, 5)
+        XCTAssertTrue(v.pairs[6].isToday); XCTAssertEqual(v.pairs[6].count, 3)
+        XCTAssertEqual(calendar.dateComponents([.day], from: v.pairs[2].previousDay, to: v.pairs[2].day).day, 7)
+        XCTAssertEqual(v.peak, 12)
+        XCTAssertEqual(v.trend, .up(20))
+        XCTAssertEqual(MailVolume(days: [], thisWeek: 48, lastWeek: 50).trend, .same)
+        XCTAssertEqual(MailVolume(days: [], thisWeek: 30, lastWeek: 60).trend, .down(50))
+        XCTAssertEqual(MailVolume(days: [], thisWeek: 4, lastWeek: 0).trend, .noHistory)
+        XCTAssertNil(MailVolume.from(counts: [1, 2], windows: w))
+    }
+
+    func testCountsComeFromOneRequestWithoutDownloadingMail() async throws {
+        var seen: [[Any]] = []
+        let (client, _) = try await makeClient { calls in
+            seen = calls
+            return calls.enumerated().map { i, c in ["Email/query", ["total": i + 1, "ids": []] as [String: Any], c[2]] }
+        }
+        let v = try await client.mailVolume(excluding: ["sent", "trash"], calendar: calendar)
+        XCTAssertEqual(seen.count, 16, "one request with 16 counts")
+        let args = seen.first?[1] as? [String: Any]
+        XCTAssertEqual(args?["limit"] as? Int, 0, "no messages are downloaded")
+        XCTAssertEqual(args?["calculateTotal"] as? Bool, true)
+        XCTAssertEqual(v?.days.first?.count, 1)
+        XCTAssertEqual(v?.thisWeek, 15); XCTAssertEqual(v?.lastWeek, 16)
+    }
+}

@@ -26,8 +26,7 @@ These come from looking at what Apple Mail, Mimestream, Spark, Airmail, MailMate
 - An editorial look: ink-blue navigation, a slightly lighter inbox, and a warm paper reader with a copper accent. Light and dark appearances, plus a dim reader for dark rooms (Settings → General).
 - **Top row**: Search / command field (⌘K) and New Message on the left; Reply, Reply All, Forward, Archive, Snooze, Flag, Read and Trash on the right. With several rows selected it shows "N selected", because the actions then apply to all of them.
 - **Sidebar**, borrowing ideas from weather apps such as Acme Weather and Dark Sky:
-  - **Inbox conditions card** (hide it under Settings → Summary Card): the unread count as a large numeral, a one-word condition (Clear, Light, Steady, Busy, Stormy), and a forecast-style sentence ("3 new in the last hour · 12 today").
-  - A 24-hour graph of when mail arrived, with the current hour in copper.
+  - **Inbox summary card** (hide it under Settings → Summary Card): the unread count as a large numeral, the number of new messages in the last 7 days with the change from the 7 days before ("▲ 12%"), and a bar for each day this week beside the same weekday last week, with today in copper. Hover a day for exact numbers. Counts come from one request of server totals, so no mail is downloaded for them.
   - A visible switch for new-mail alerts.
   - **Up to three extra stats** of your choice (Settings → Summary Card):
     - Oldest unread

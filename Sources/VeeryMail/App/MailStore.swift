@@ -138,7 +138,9 @@ final class MailStore {
     /// When mail was last confirmed up to date (shown as "Updated …" in the sidebar).
     var lastSync = Date.distantPast
     /// Arrival times of Inbox mail in the last 24 hours, for the sidebar's activity graph.
-    var inboxArrivals: [Date] = []
+    /// New mail per day for the summary card's two-week chart.
+    var mailVolume: MailVolume?
+    @ObservationIgnored var volumeRefreshedAt = Date.distantPast
     /// Inbox mail from the last 24 hours (headers only), for "Top senders today".
     var inboxRecent: [EmailSummary] = []
     /// Values for the optional stats on the sidebar card. Only the stats you've chosen are fetched.
@@ -177,9 +179,7 @@ final class MailStore {
         }
         totalInSource = messages.count
         lastSync = Date().addingTimeInterval(-90)
-        let extra = [0.3, 1.2, 1.4, 2.6, 3.1, 3.3, 5.2, 6.8, 9.5, 10.1, 13.4, 15.8, 22.0]
-        inboxArrivals = messages.map(\.receivedAt).filter { $0 > Date().addingTimeInterval(-86_400) }
-            + extra.map { Date().addingTimeInterval(-$0 * 3600) }
+        mailVolume = MailVolume.demo()
         inboxRecent = messages.filter { $0.receivedAt > Date().addingTimeInterval(-86_400) }
         cardStats = CardStatValues.demo(messages: messages)
         outbox.sender = DemoOutboxSender()
@@ -257,7 +257,7 @@ final class MailStore {
                 lastSync = Date()
                 configureOutboxSender()
                 outbox.resume()
-                refreshArrivals()
+                refreshArrivals(force: true)
                 refreshStats(force: true)
                 requestNotificationPermission()
                 startPush(gen)
@@ -315,7 +315,7 @@ final class MailStore {
         sourceStorage = .mailbox("")
         totalInSource = nil; isLoadingList = false; isLoadingThread = false
         emailState = nil; threadCache = [:]; threadCacheOrder = []; openedRowId = nil
-        inboxArrivals = []; inboxRecent = []; cardStats = CardStatValues(); recentMeta = []
+        mailVolume = nil; volumeRefreshedAt = .distantPast; inboxRecent = []; cardStats = CardStatValues(); recentMeta = []
         statsRefreshedAt = .distantPast; metaRefreshedAt = .distantPast
         notifiedIds = []; snoozeRecords = []; snoozeStorage = nil
         pendingPermanentDelete = nil

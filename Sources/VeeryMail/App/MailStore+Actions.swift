@@ -439,17 +439,28 @@ extension MailStore {
 
     // MARK: Sidebar data
 
-    /// Loads when Inbox mail arrived over the last day. One small request; failures are ignored
-    /// because the graph is decoration, not data the user acts on.
-    func refreshArrivals() {
+    /// Loads the summary card's data: daily new-mail counts for two weeks (one request of
+    /// counts only, at most every 5 minutes unless forced) and today's Inbox mail for the
+    /// "Top senders" stat. Failures are ignored: the card is a summary, not data you act on.
+    func refreshArrivals(force: Bool = false) {
         guard !isDemo, defaults.object(forKey: "sidebar.showConditions") as? Bool ?? true,
               let client, let inbox = mailbox(role: "inbox") else { return }
         let gen = generation
-        let since = JMAPDate.string(Date().addingTimeInterval(-24 * 3600))
+        let now = Date()
+        let dayChanged = mailVolume.map { !Calendar.current.isDate($0.days.last?.start ?? .distantPast, inSameDayAs: now) } ?? true
+        if force || dayChanged || now.timeIntervalSince(volumeRefreshedAt) > 300 {
+            volumeRefreshedAt = now
+            let excluded = ["sent", "drafts", "junk", "trash"].compactMap { mailbox(role: $0)?.id }
+            Task {
+                if let volume = try? await client.mailVolume(now: now, excluding: excluded), isLive(gen) {
+                    mailVolume = volume
+                }
+            }
+        }
+        let since = JMAPDate.string(now.addingTimeInterval(-24 * 3600))
         Task {
             if let page = try? await client.queryEmails(filter: ["inMailbox": inbox.id, "after": since],
                                                         limit: 250, collapseThreads: false), isLive(gen) {
-                inboxArrivals = page.emails.map(\.receivedAt)
                 inboxRecent = page.emails
             }
         }

@@ -164,3 +164,15 @@ enum DemoMail {
                           threads: threads.compactMap { decode([EmailDetail].self, $0) })
     }
 }
+
+extension MailVolume {
+    /// Plausible two weeks of mail for demo mode and screenshots.
+    static func demo(now: Date = Date()) -> MailVolume {
+        let windows = MailVolume.windows(now: now)
+        let lastWeek = [18, 22, 25, 19, 23, 9, 6]
+        let thisWeek = [21, 27, 24, 26, 30, 12, 8]
+        let days = lastWeek + thisWeek
+        let counts = days + [thisWeek.reduce(0, +), lastWeek.reduce(0, +)]
+        return MailVolume.from(counts: counts, windows: windows)!
+    }
+}

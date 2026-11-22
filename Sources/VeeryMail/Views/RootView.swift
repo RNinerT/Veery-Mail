@@ -458,7 +458,7 @@ struct SidebarView: View {
         }
         .background(Theme.nav.ignoresSafeArea())
         // The card's graph data is only fetched while the card is showing.
-        .onChange(of: showConditions) { _, showing in if showing { store.refreshArrivals() } }
+        .onChange(of: showConditions) { _, showing in if showing { store.refreshArrivals(force: true) } }
         .contextMenu {
             Button("Expand All Folders") { collapsedStorage = "" }
             Button("Collapse All Folders") {

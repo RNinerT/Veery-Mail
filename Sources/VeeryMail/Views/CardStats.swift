@@ -362,10 +362,10 @@ struct SummaryCardSettings: View {
         Form {
             Section {
                 Toggle("Show the Inbox summary card at the top of the sidebar", isOn: $showCard)
-                Toggle("Show the 24-hour graph of arriving mail", isOn: $showGraph)
+                Toggle("Show new mail this week compared with last week", isOn: $showGraph)
                     .disabled(!showCard)
             } footer: {
-                Text("The card shows your unread count, a one-word summary and, if you like, a 24-hour graph of arriving mail.")
+                Text("The card shows your unread count and, if you like, a bar for each day this week beside the same day last week. Sent, Drafts, Spam and Trash aren’t counted.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
