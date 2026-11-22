@@ -55,8 +55,8 @@ jobs:
           lipo -archs "$APP/Contents/MacOS/VeeryMail"
           /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist"
 
-      - name: Launch smoke test (demo mode, then compose window and emoji picker)
-        timeout-minutes: 4
+      - name: Launch smoke test (Mail, compose, Contacts, and Calendar)
+        timeout-minutes: 5
         run: |
           BIN="build/Veery Mail.app/Contents/MacOS/VeeryMail"
           REPORTS="$HOME/Library/Logs/DiagnosticReports"
@@ -84,6 +84,8 @@ jobs:
           status=0
           run_phase launch -demo YES || status=1
           run_phase emoji -demo YES -uitest.openEmoji YES || status=1
+          run_phase contacts -demo YES -uitest.workspace contacts || status=1
+          run_phase calendar -demo YES -uitest.workspace calendar || status=1
           exit $status
 
       - name: Strict concurrency check (warnings only)

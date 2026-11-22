@@ -189,6 +189,25 @@ final class RecipientTests: XCTestCase {
 }
 
 final class ContactsTests: XCTestCase {
+    func testAddingContactUsesTheDefaultWritableAddressBook() async throws {
+        let (client, _) = try await makeClient { calls in
+            if calls[0][0] as? String == "AddressBook/get" {
+                return [["AddressBook/get", ["list": [
+                    ["id": "shared", "isDefault": false, "myRights": ["mayWrite": true]],
+                    ["id": "personal", "isDefault": true, "myRights": ["mayWrite": true]],
+                ]], "b"]]
+            }
+            XCTAssertEqual(calls[0][0] as? String, "ContactCard/set")
+            let args = calls[0][1] as? [String: Any]
+            let card = (args?["create"] as? [String: [String: Any]])?["new"]
+            XCTAssertEqual(card?["addressBookIds"] as? [String: Bool], ["personal": true])
+            XCTAssertEqual((card?["emails"] as? [String: [String: String]])?["main"]?["address"], "imani@example.com")
+            return [["ContactCard/set", ["created": ["new": ["id": "c1"]]], "c"]]
+        }
+        let id = try await client.addContact(EmailAddress(name: "Imani", email: "imani@example.com"))
+        XCTAssertEqual(id, "c1")
+    }
+
     func testContactCardsAreRead() async throws {
         let (client, _) = try await makeClient { calls in
             XCTAssertEqual(calls[0][0] as? String, "ContactCard/get")

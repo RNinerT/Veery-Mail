@@ -256,6 +256,17 @@ struct MessageSection: View {
             Button("Reply") { store.reply(all: false, to: email) }
             Button("Reply All") { store.reply(all: true, to: email) }
             Button("Forward") { store.forward(email) }
+            Divider()
+            if let sender = email.from?.first {
+                Button("Add Sender to Contacts…") {
+                    store.newContact = ContactDraft(name: sender.displayName, email: sender.email)
+                    store.workspace = .contacts
+                }
+            }
+            Button("Create Event from Email…") {
+                store.newEvent = EventDraft(title: email.subject ?? "", mailID: email.id)
+                store.workspace = .calendar
+            }
             if UnsubscribePolicy.option(for: email) != .none {
                 Divider()
                 Button("Unsubscribe…") { store.unsubscribe(email) }

@@ -21,8 +21,9 @@ extension MailStore {
         }
     }
 
-    func compose() {
+    func compose(to address: EmailAddress? = nil) {
         var d = ComposeDraft(identityId: defaultIdentity?.id)
+        d.to = address?.fieldText ?? ""
         if let block = Signatures.block(for: d.identityId, reply: false) {
             d.body = "\n\n" + block
             d.signatureBlock = block
@@ -283,7 +284,8 @@ extension MailStore {
         var seen = Set<String>()
         var out: [EmailAddress] = []
         let fromThread = thread.flatMap { ($0.from ?? []) + ($0.to ?? []) + ($0.cc ?? []) }
-        for addr in contacts + fromThread + messages.flatMap({ ($0.from ?? []) + ($0.to ?? []) }) {
+        let saved = (defaults.object(forKey: "contacts.enabled") as? Bool ?? true) ? contacts : []
+        for addr in saved + fromThread + messages.flatMap({ ($0.from ?? []) + ($0.to ?? []) }) {
             let key = addr.email.lowercased()
             if mine.contains(key) || key.contains("noreply") || key.contains("no-reply") { continue }
             if seen.insert(key).inserted { out.append(addr) }
