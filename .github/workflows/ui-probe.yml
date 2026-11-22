@@ -1,8 +1,7 @@
-# Temporary: reproduces message-list selection behaviour with real clicks on a macOS runner.
+# Manual UI check: launches the demo on a macOS runner, clicks message rows with real mouse
+# events and saves a screenshot after each click (Actions → UI probe → Run workflow).
 name: UI probe
 on:
-  push:
-    branches: ["claude/list-selection-*"]
   workflow_dispatch:
 jobs:
   probe:
