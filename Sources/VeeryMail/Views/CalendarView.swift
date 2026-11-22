@@ -144,10 +144,6 @@ struct CalendarView: View {
             Text("Calendar").font(.system(size: 42, design: .serif))
             Text("Use the Fastmail account already open in Veery. Fastmail may ask you to approve Calendar access once.")
                 .foregroundStyle(WorkspacePaper.secondary)
-            if mail.authMethod == .developerToken {
-                Text("Approve access in your browser to switch this mailbox from an API token to Fastmail sign-in.")
-                    .foregroundStyle(WorkspacePaper.secondary)
-            }
             Button("Allow Fastmail Calendar Access") {
                 authorization.start(store: mail, includeContacts: includeContacts || mail.client?.contactsAccountId != nil,
                                     authorizeCalendar: true)

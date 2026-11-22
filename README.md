@@ -215,4 +215,4 @@ Sources/VeeryMail/
 
 - **Snooze** moves the conversation to a `Later` mailbox and back again. That happens while Veery Mail is running or at the next launch on this Mac; Fastmail's server-side snooze uses a vendor extension that isn't public.
 - One Fastmail account at a time. Message bodies are not cached for offline reading.
-- Calendar uses Fastmail OAuth. If Mail uses an API token, approving Calendar access switches that same mailbox to **Sign in with Fastmail**.
+- Calendar uses Fastmail OAuth. If Mail uses an API token, approve Calendar access for the same Fastmail account to keep Mail and features such as Masked Email working with the existing token.
