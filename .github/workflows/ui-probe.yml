@@ -1,0 +1,36 @@
+# Temporary: reproduces message-list selection behaviour with real clicks on a macOS runner.
+name: UI probe
+on:
+  push:
+    branches: ["claude/list-selection-*"]
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: ./scripts/build-app.sh
+      - name: Click through the demo list
+        run: |
+          BIN="build/Veery Mail.app/Contents/MacOS/VeeryMail"
+          "$BIN" -demo YES > app.log 2>&1 &
+          sleep 12
+          swiftc -O scripts/ui-probe/click.swift -o click
+          shot() { sleep 1.2; screencapture -x "probe-$1.png"; }
+          shot 0-start
+          ./click 360 226; shot 1-imani-name
+          ./click 520 395; shot 2-mateo-right
+          ./click 360 527 3 1; shot 3-priya-wobble
+          ./click 450 340; shot 4-shelf-middle
+          ./click 360 461; ./click 360 395; shot 5-rapid-north-then-mateo
+          ./click 540 244; shot 6-imani-preview-right
+          sleep 3; shot 7-after-wait
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe
+          path: |
+            probe-*.png
+            app.log
