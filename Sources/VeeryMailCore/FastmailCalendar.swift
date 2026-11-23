@@ -101,7 +101,25 @@ public struct FastmailCalendar: Sendable {
 
     public func events(in collection: FastmailCalendarCollection, from start: Date, to end: Date,
                        calendar: Calendar = .current) async throws -> [FastmailCalendarEvent] {
-        guard end > start, end.timeIntervalSince(start) <= 32 * 86_400 else { throw FastmailCalendarError.invalidDates }
+        guard end > start, end.timeIntervalSince(start) <= 91 * 86_400 else { throw FastmailCalendarError.invalidDates }
+        var from = start
+        var seen = Set<String>()
+        var events: [FastmailCalendarEvent] = []
+        while from < end {
+            try Task.checkCancellation()
+            // Bound each server-side recurrence expansion while keeping local day boundaries across DST.
+            let boundary = calendar.date(byAdding: .day, value: 30, to: from) ?? from.addingTimeInterval(30 * 86_400)
+            let until = min(boundary, end)
+            let batch = try await eventBatch(in: collection, from: from, to: until, calendar: calendar)
+            events += batch.filter { seen.insert($0.id).inserted }
+            from = until
+        }
+        return events.filter { $0.start < end && ($0.end > start || $0.start >= start) }
+            .sorted { $0.start < $1.start }
+    }
+
+    private func eventBatch(in collection: FastmailCalendarCollection, from start: Date, to end: Date,
+                            calendar: Calendar) async throws -> [FastmailCalendarEvent] {
         let first = CalendarICS.utc(start)
         let last = CalendarICS.utc(end)
         let (data, _) = try await request("REPORT", url: collection.url, depth: "1", body: """
@@ -112,16 +130,12 @@ public struct FastmailCalendar: Sendable {
               </c:comp-filter></c:comp-filter></c:filter>
             </c:calendar-query>
             """)
-        let events = try Self.responses(data).flatMap { response -> [FastmailCalendarEvent] in
+        return try Self.responses(data).flatMap { response -> [FastmailCalendarEvent] in
             guard let ics = Self.element(Self.properties(response), "calendar-data", Self.caldav)?.stringValue else {
                 throw FastmailCalendarError.unexpectedResponse
             }
             return CalendarICS.events(ics, calendar: calendar)
         }
-        var seen = Set<String>()
-        return events.filter { event in
-            event.start < end && (event.end > start || event.start >= start) && seen.insert(event.id).inserted
-        }.sorted { $0.start < $1.start }
     }
 
     public func create(_ event: CalendarEventInput, in collection: FastmailCalendarCollection,

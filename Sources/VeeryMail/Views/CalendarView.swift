@@ -9,7 +9,7 @@ struct EventDraft: Identifiable {
     var mailID: String?
 }
 
-private struct AgendaEvent: Identifiable {
+struct AgendaEvent: Identifiable {
     let id: String
     let title: String
     let start: Date
@@ -26,7 +26,9 @@ struct CalendarView: View {
     @Environment(MailStore.self) private var mail
     @State private var authorization = FastmailSignIn()
     @AppStorage("contacts.enabled") private var includeContacts = true
-    @State private var date = Calendar.current.startOfDay(for: Date())
+    @Binding var date: Date
+    @AppStorage("calendar.display") private var display = CalendarDisplay.agenda
+    @State private var gridEvent: AgendaEvent?
     @State private var calendars: [FastmailCalendarCollection] = []
     @State private var selectedCalendar = ""
     @State private var events: [AgendaEvent] = []
@@ -43,7 +45,7 @@ struct CalendarView: View {
     private var canAdd: Bool { mail.isDemo || calendars.contains(where: \.canCreateEvents) }
 
     private struct AgendaQuery: Equatable {
-        let date: Date
+        let range: DateInterval
         let calendarID: String
         let generation: Int
         let hasCalendar: Bool
@@ -51,40 +53,53 @@ struct CalendarView: View {
     }
 
     private var query: AgendaQuery {
-        AgendaQuery(date: date, calendarID: selectedCalendar, generation: mail.generation,
+        AgendaQuery(range: display.range(containing: date, calendar: calendar),
+                    calendarID: selectedCalendar, generation: mail.generation,
                     hasCalendar: allowed, refresh: refreshCount)
     }
 
     var body: some View {
         @Bindable var mail = mail
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                if allowed {
-                    dateControls
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(calendar.isDateInToday(date) ? "Today" : date.formatted(.dateTime.weekday(.wide)))
-                            .font(.system(size: 46, weight: .regular, design: .serif))
-                        Text(daySummary).foregroundStyle(WorkspacePaper.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            if allowed {
+                dateControls
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                Divider()
+                if needsAuthorization {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            accessPrompt
+                            if let error, !authorization.isBusy { Text(error).foregroundStyle(WorkspacePaper.accent) }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(24)
                     }
-                    if needsAuthorization {
-                        accessPrompt
-                        if let error, !authorization.isBusy { Text(error).foregroundStyle(WorkspacePaper.accent) }
-                    } else if let error {
-                        Text(error).foregroundStyle(WorkspacePaper.accent)
-                    } else if loading {
-                        ProgressView("Loading Fastmail Calendar…").controlSize(.small)
-                    } else {
-                        timeline
-                        week
-                    }
+                } else if let error {
+                    ContentUnavailableView("Calendar Unavailable", systemImage: "calendar.badge.exclamationmark",
+                                           description: Text(error))
+                } else if loading {
+                    ProgressView("Loading Fastmail Calendar…").controlSize(.small)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if display == .agenda {
+                    agenda
+                } else if display == .day || display == .threeDays {
+                    CalendarTimeGrid(days: visibleDays, calendar: calendar) { gridEvent = $0 }
                 } else {
+                    CalendarDateGrid(days: visibleDays, calendar: calendar, compact: display == .ninetyDays) { day in
+                        date = day
+                        display = .day
+                    } openEvent: { gridEvent = $0 }
+                }
+            } else {
+                ScrollView {
                     accessPrompt
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(32)
                 }
             }
-            .frame(maxWidth: 820, alignment: .leading)
-            .padding(32)
-            .frame(maxWidth: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundStyle(WorkspacePaper.ink)
         .background(WorkspacePaper.surface)
         .environment(\.colorScheme, .light)
@@ -96,6 +111,19 @@ struct CalendarView: View {
             if previous == .finishing && stage == .idle && allowed { refreshCount += 1 }
         }
         .onDisappear { authorization.cancel() }
+        .sheet(item: $gridEvent) { event in
+            VStack(alignment: .leading, spacing: 18) {
+                Text(event.title).font(.system(.title2, design: .serif))
+                eventDetails(event)
+                HStack {
+                    Spacer()
+                    Button("Done") { gridEvent = nil }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(24)
+            .frame(width: 380)
+        }
         .sheet(item: Binding(get: { canAdd ? mail.newEvent : nil }, set: { mail.newEvent = $0 })) { draft in
             EventEditor(draft: draft, calendars: calendars.filter(\.canCreateEvents),
                         defaultCalendar: calendars.first { $0.id == selectedCalendar && $0.canCreateEvents },
@@ -105,37 +133,87 @@ struct CalendarView: View {
         }
     }
 
+    private var visibleDays: [CalendarGridDay] {
+        CalendarDisplay.days(in: query.range, calendar: calendar)
+            .map { CalendarGridDay(date: $0, events: eventsOn($0)) }
+    }
+
+    private var agenda: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(calendar.isDateInToday(date) ? "Today" : date.formatted(.dateTime.weekday(.wide)))
+                        .font(.system(size: 46, weight: .regular, design: .serif))
+                    Text(daySummary).foregroundStyle(WorkspacePaper.secondary)
+                }
+                timeline
+                week
+            }
+            .frame(maxWidth: 820, alignment: .leading)
+            .padding(28)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var rangeLabel: String {
+        let range = query.range
+        let last = calendar.date(byAdding: .day, value: -1, to: range.end) ?? range.start
+        switch display {
+        case .agenda, .day: return date.formatted(.dateTime.month(.wide).day().year())
+        case .month: return range.start.formatted(.dateTime.month(.wide).year())
+        case .threeDays, .ninetyDays: return formattedRange(from: range.start, to: last)
+        }
+    }
+
+    private func formattedRange(from start: Date, to end: Date, timeStyle: DateIntervalFormatter.Style = .none) -> String {
+        let formatter = DateIntervalFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = timeStyle
+        return formatter.string(from: start, to: end)
+    }
+
     private var dateControls: some View {
-        HStack {
-            Text(date, format: .dateTime.month(.wide).day().year())
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(WorkspacePaper.secondary)
-            Spacer()
-            if !calendars.isEmpty {
-                Picker("Calendar", selection: $selectedCalendar) {
-                    Text("All Calendars").tag("")
-                    ForEach(calendars, id: \.id) { item in
-                        Text(item.title).tag(item.id)
-                    }
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Text(rangeLabel)
+                    .font(.system(.title2, design: .serif))
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                Button { movePage(-1) } label: { Label("Previous Period", systemImage: "chevron.left") }
+                    .labelStyle(.iconOnly)
+                Button("Today") { date = calendar.startOfDay(for: Date()) }
+                Button { movePage(1) } label: { Label("Next Period", systemImage: "chevron.right") }
+                    .labelStyle(.iconOnly)
+                Button { refreshCount += 1 } label: { Label("Refresh Calendar", systemImage: "arrow.clockwise") }
+                    .labelStyle(.iconOnly)
+                    .help("Refresh Calendar")
+                    .disabled(loading)
+                Button("New Event", systemImage: "plus") {
+                    let start = calendar.isDateInToday(date) ? Date() : calendar.date(byAdding: .hour, value: 9, to: date) ?? date
+                    mail.newEvent = EventDraft(start: start)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(WorkspacePaper.accent)
+                .disabled(!canAdd)
+            }
+            HStack {
+                Picker("Calendar View", selection: $display) {
+                    ForEach(CalendarDisplay.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
                 .labelsHidden()
+                .pickerStyle(.segmented)
+                .fixedSize()
+                Spacer()
+                if !calendars.isEmpty {
+                    Picker("Calendar", selection: $selectedCalendar) {
+                        Text("All Calendars").tag("")
+                        ForEach(calendars) { Text($0.title).tag($0.id) }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 200)
+                }
             }
-            Button { moveDay(-1) } label: { Label("Previous Day", systemImage: "chevron.left") }
-                .labelStyle(.iconOnly)
-            Button { refreshCount += 1 } label: { Label("Refresh Calendar", systemImage: "arrow.clockwise") }
-                .labelStyle(.iconOnly)
-                .help("Refresh Calendar")
-                .disabled(loading)
-            Button("Today") { date = calendar.startOfDay(for: Date()) }
-            Button { moveDay(1) } label: { Label("Next Day", systemImage: "chevron.right") }
-                .labelStyle(.iconOnly)
-            Button("New Event", systemImage: "plus") {
-                let start = calendar.isDateInToday(date) ? Date() : calendar.date(byAdding: .hour, value: 9, to: date) ?? date
-                mail.newEvent = EventDraft(start: start)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(WorkspacePaper.accent)
-            .disabled(!canAdd)
         }
     }
 
@@ -223,22 +301,36 @@ struct CalendarView: View {
                 }
                 .buttonStyle(.plain)
                 if selectedEvent == event.id {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(event.calendarName).font(.caption)
-                        if !event.allDay { Text("\(event.start.formatted(date: .omitted, time: .shortened))–\(event.end.formatted(date: .omitted, time: .shortened))") }
-                        if let location = event.location, !location.isEmpty { Text(location) }
-                        if let notes = event.notes, !notes.isEmpty { Text(notes).textSelection(.enabled) }
-                        if let id = event.relatedMessage {
-                            Button("Open Related Email") { mail.showLinkedMessage(id) }
-                        }
-                    }
-                    .foregroundStyle(WorkspacePaper.secondary)
-                    .padding(.leading, 17)
+                    eventDetails(event).padding(.leading, 17)
                 }
             }
         }
         .padding(14)
         .background(.black.opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func eventDetails(_ event: AgendaEvent) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(event.calendarName).font(.caption)
+            if event.allDay {
+                Text("All Day · " + event.start.formatted(date: .abbreviated, time: .omitted))
+            } else {
+                Text(formattedRange(from: event.start, to: max(event.start, event.end), timeStyle: .short))
+            }
+            if let location = event.location, !location.isEmpty { Text(location) }
+            if let notes = event.notes, !notes.isEmpty {
+                ScrollView { Text(notes).textSelection(.enabled) }
+                    .frame(maxHeight: 160)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let id = event.relatedMessage {
+                Button("Open Related Email") {
+                    gridEvent = nil
+                    mail.showLinkedMessage(id)
+                }
+            }
+        }
+        .foregroundStyle(WorkspacePaper.secondary)
     }
 
     private var week: some View {
@@ -275,8 +367,8 @@ struct CalendarView: View {
         return events.filter { $0.start < end && ($0.end > day || $0.start >= day) }
     }
 
-    private func moveDay(_ days: Int) {
-        if let newDate = calendar.date(byAdding: .day, value: days, to: date) { date = newDate }
+    private func movePage(_ direction: Int) {
+        date = display.page(from: date, direction: direction, calendar: calendar)
     }
 
     private func refresh(_ request: AgendaQuery) async {
@@ -290,7 +382,9 @@ struct CalendarView: View {
             let samples: [(Int, Int, String, Color)] = [
                 (0, 9, "Creative review", .blue), (0, 12, "Lunch with Jamie", .orange),
                 (0, 16, "School pickup", .green), (1, 10, "Production kickoff", .blue),
-                (3, 14, "Design handoff", .blue), (6, 12, "Family lunch", .green)
+                (3, 14, "Design handoff", .blue), (6, 12, "Family lunch", .green),
+                (14, 10, "Project kickoff", .orange), (32, 11, "Planning workshop", .blue),
+                (53, 16, "Coffee with Alex", .green), (78, 9, "Team offsite", .orange)
             ]
             events = samples.compactMap { day, hour, title, color in
                 guard let start = calendar.date(byAdding: DateComponents(day: day, hour: hour), to: today) else { return nil }
@@ -305,7 +399,6 @@ struct CalendarView: View {
             events = []
             return
         }
-        guard let end = calendar.date(byAdding: .day, value: 8, to: request.date) else { return }
         do {
             let available = try await service.calendars()
             guard !Task.isCancelled, request == query else { return }
@@ -317,7 +410,8 @@ struct CalendarView: View {
             let shown = request.calendarID.isEmpty ? available : available.filter { $0.id == request.calendarID }
             var agenda: [AgendaEvent] = []
             for collection in shown {
-                let instances = try await service.events(in: collection, from: request.date, to: end, calendar: calendar)
+                let instances = try await service.events(in: collection, from: request.range.start,
+                                                         to: request.range.end, calendar: calendar)
                 guard !Task.isCancelled, request == query else { return }
                 let color = collection.color.flatMap(calendarColor) ?? WorkspacePaper.accent
                 agenda += instances.map { event in

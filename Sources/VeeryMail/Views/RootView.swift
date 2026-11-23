@@ -25,28 +25,34 @@ enum MailWorkspace: String, CaseIterable {
 struct WorkspaceView: View {
     @Environment(MailStore.self) private var store
     @Environment(\.openWindow) private var openWindow
+    @State private var calendarDate = Calendar.current.startOfDay(for: Date())
 
     var body: some View {
         @Bindable var store = store
-        Group {
-            switch store.workspace {
-            case .mail: MainView()
-            case .contacts: ContactsView()
-            case .calendar: CalendarView()
+        VStack(spacing: 0) {
+            Picker("Workspace", selection: $store.workspace) {
+                ForEach(MailWorkspace.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .frame(maxWidth: .infinity)
+            .frame(height: 38)
+            .background(Theme.nav)
+            Divider()
+            Group {
+                switch store.workspace {
+                case .mail: MainView()
+                case .contacts: ContactsView()
+                case .calendar: CalendarView(date: $calendarDate)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                Picker("Workspace", selection: $store.workspace) {
-                    ForEach(MailWorkspace.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .fixedSize()
-            }
-            if store.workspace != .mail {
-                ToolbarItem(placement: .navigation) {
-                    SettingsLink { Label("Settings", systemImage: "gearshape") }
-                }
+            ToolbarItem(placement: .navigation) {
+                SettingsLink { Label("Settings", systemImage: "gearshape") }
+                    .help("Settings")
             }
         }
         .toolbarBackground(Theme.nav, for: .windowToolbar)
@@ -82,12 +88,6 @@ struct MainView: View {
         NavigationSplitView(columnVisibility: $columns) {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 340)
-                .toolbar {
-                    ToolbarItem(placement: .navigation) {
-                        SettingsLink { Label("Settings", systemImage: "gearshape") }
-                            .help("Settings")
-                    }
-                }
         } content: {
             InboxListView()
                 .overlay(alignment: .bottom) { StatusOverlay() }

@@ -85,7 +85,10 @@ jobs:
           run_phase launch -demo YES || status=1
           run_phase emoji -demo YES -uitest.openEmoji YES || status=1
           run_phase contacts -demo YES -uitest.workspace contacts || status=1
-          run_phase calendar -demo YES -uitest.workspace calendar || status=1
+          run_phase calendar -demo YES -uitest.workspace calendar -calendar.display agenda || status=1
+          run_phase calendar-three-days -demo YES -uitest.workspace calendar -calendar.display threeDays || status=1
+          run_phase calendar-month -demo YES -uitest.workspace calendar -calendar.display month || status=1
+          run_phase calendar-ninety-days -demo YES -uitest.workspace calendar -calendar.display ninetyDays || status=1
           exit $status
 
       - name: Strict concurrency check (warnings only)
