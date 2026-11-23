@@ -26,33 +26,33 @@ struct WorkspaceView: View {
     @Environment(MailStore.self) private var store
     @Environment(\.openWindow) private var openWindow
     @State private var calendarDate = Calendar.current.startOfDay(for: Date())
+    @State private var mailColumns = NavigationSplitViewVisibility.all
 
     var body: some View {
         @Bindable var store = store
-        VStack(spacing: 0) {
-            Picker("Workspace", selection: $store.workspace) {
-                ForEach(MailWorkspace.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        Group {
+            switch store.workspace {
+            case .mail: MainView(columns: $mailColumns)
+            case .contacts: ContactsView()
+            case .calendar: CalendarView(date: $calendarDate)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            .frame(maxWidth: .infinity)
-            .frame(height: 38)
-            .background(Theme.nav)
-            Divider()
-            Group {
-                switch store.workspace {
-                case .mail: MainView()
-                case .contacts: ContactsView()
-                case .calendar: CalendarView(date: $calendarDate)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar {
             ToolbarItem(placement: .navigation) {
-                SettingsLink { Label("Settings", systemImage: "gearshape") }
-                    .help("Settings")
+                HStack(spacing: 10) {
+                    SettingsLink { Label("Settings", systemImage: "gearshape").labelStyle(.iconOnly) }
+                        .help("Settings")
+                    Picker("Workspace", selection: $store.workspace) {
+                        ForEach(MailWorkspace.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                }
+            }
+            if store.workspace == .mail {
+                mailToolbar
             }
         }
         .toolbarBackground(Theme.nav, for: .windowToolbar)
@@ -77,11 +77,77 @@ struct WorkspaceView: View {
             }
         }
     }
+
+    @ToolbarContentBuilder
+    private var mailToolbar: some ToolbarContent {
+        ToolbarItem {
+            let sidebarHidden = mailColumns == .doubleColumn || mailColumns == .detailOnly
+            let title = sidebarHidden ? "Show Mail Sidebar" : "Hide Mail Sidebar"
+            Button {
+                mailColumns = sidebarHidden ? .all : .doubleColumn
+            } label: {
+                Label(title, systemImage: "sidebar.left")
+            }
+            .help(title)
+        }
+        ToolbarItem { CommandBarButton() }
+        ToolbarItem {
+            Button { store.compose() } label: { Label("New Message", systemImage: "square.and.pencil") }
+                .help("New Message (C)")
+        }
+        ToolbarItem { Spacer() }
+        ToolbarItem {
+            // Says what the actions apply to when it isn't simply the open conversation.
+            if store.selection.count > 1 {
+                Text("\(store.selection.count) selected")
+                    .font(Theme.Typeface.meta.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                    .accessibilityLabel("Actions apply to \(store.selection.count) selected conversations")
+            }
+        }
+        // Reply, Archive and the rest act on the selection: the open conversation, or every selected row.
+        ToolbarItemGroup {
+            let none = store.selection.isEmpty
+            let single = store.selection.count == 1
+            Button { store.reply(all: false) } label: {
+                Label("Reply", systemImage: "arrowshape.turn.up.left").labelStyle(.titleAndIcon)
+            }
+            .help("Reply (R)")
+            .disabled(!single || store.thread.isEmpty)
+            Button { store.forward() } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
+                .help("Forward (F)")
+                .disabled(!single || store.thread.isEmpty)
+            Button { store.archive() } label: { Label("Archive", systemImage: "archivebox") }
+                .help("Archive (E)")
+                .disabled(none)
+            Menu {
+                ForEach(SnoozePresets.options(), id: \.name) { option in
+                    Button(option.name) { store.snooze(until: option.date) }
+                }
+            } label: { Label("Snooze", systemImage: "clock") }
+                .help("Snooze (H = tomorrow)")
+                .disabled(none)
+            Button { store.toggleFlag() } label: { Label("Flag", systemImage: "flag") }
+                .help("Flag (S)")
+                .disabled(none)
+            if store.source == .mailbox(store.mailbox(role: "trash")?.id ?? "-") {
+                Button { store.requestPermanentDelete() } label: {
+                    Label("Delete Permanently", systemImage: "trash.slash")
+                }
+                .help("Delete Permanently… (⌥⌘⌫)")
+                .disabled(none)
+            } else {
+                Button { store.trash() } label: { Label("Trash", systemImage: "trash") }
+                    .help("Move to Trash (#)")
+                    .disabled(none)
+            }
+        }
+    }
 }
 
 struct MainView: View {
     @Environment(MailStore.self) private var store
-    @State private var columns = NavigationSplitViewVisibility.all
+    @Binding var columns: NavigationSplitViewVisibility
 
     var body: some View {
         @Bindable var store = store
@@ -95,70 +161,7 @@ struct MainView: View {
         } detail: {
             ReaderView()
         }
-        // Everything lives in the window's top row: search and compose on the left,
-        // the actions for the open conversation on the right, above the reader.
-        .toolbar {
-            ToolbarItem { CommandBarButton() }
-            ToolbarItem {
-                Button { store.compose() } label: { Label("New Message", systemImage: "square.and.pencil") }
-                    .help("New Message (C)")
-            }
-            ToolbarItem { Spacer() }
-            ToolbarItem {
-                // Says what the actions apply to when it isn't simply the open conversation.
-                if store.selection.count > 1 {
-                    Text("\(store.selection.count) selected")
-                        .font(Theme.Typeface.meta.weight(.semibold))
-                        .foregroundStyle(Theme.accent)
-                        .accessibilityLabel("Actions apply to \(store.selection.count) selected conversations")
-                }
-            }
-            // Reply, Archive and the rest act on the selection: the open conversation, or every selected row.
-            ToolbarItemGroup {
-                let none = store.selection.isEmpty
-                let single = store.selection.count == 1
-                Button { store.reply(all: false) } label: {
-                    Label("Reply", systemImage: "arrowshape.turn.up.left").labelStyle(.titleAndIcon)
-                }
-                .help("Reply (R)")
-                .disabled(!single || store.thread.isEmpty)
-                Button { store.reply(all: true) } label: { Label("Reply All", systemImage: "arrowshape.turn.up.left.2") }
-                    .help("Reply All (A)")
-                    .disabled(!single || store.thread.isEmpty)
-                Button { store.forward() } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
-                    .help("Forward (F)")
-                    .disabled(!single || store.thread.isEmpty)
-                Button { store.archive() } label: { Label("Archive", systemImage: "archivebox") }
-                    .help("Archive (E)")
-                    .disabled(none)
-                Menu {
-                    ForEach(SnoozePresets.options(), id: \.name) { option in
-                        Button(option.name) { store.snooze(until: option.date) }
-                    }
-                } label: { Label("Snooze", systemImage: "clock") }
-                    .help("Snooze (H = tomorrow)")
-                    .disabled(none)
-                Button { store.toggleFlag() } label: { Label("Flag", systemImage: "flag") }
-                    .help("Flag (S)")
-                    .disabled(none)
-                Button { store.toggleRead() } label: { Label("Read / Unread", systemImage: "envelope.badge") }
-                    .help("Toggle Read (U)")
-                    .disabled(none)
-                if store.source == .mailbox(store.mailbox(role: "trash")?.id ?? "-") {
-                    Button { store.requestPermanentDelete() } label: {
-                        Label("Delete Permanently", systemImage: "trash.slash")
-                    }
-                    .help("Delete Permanently… (⌥⌘⌫)")
-                    .disabled(none)
-                } else {
-                    Button { store.trash() } label: { Label("Trash", systemImage: "trash") }
-                        .help("Move to Trash (#)")
-                        .disabled(none)
-                }
-            }
-        }
-        .toolbarBackground(Theme.nav, for: .windowToolbar)
-        .toolbarBackground(.visible, for: .windowToolbar)
+        .toolbar(removing: .sidebarToggle)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             store.refreshIfStale()
         }
