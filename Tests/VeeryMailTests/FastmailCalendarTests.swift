@@ -165,3 +165,65 @@ final class FastmailCalendarTests: XCTestCase {
         }
     }
 }
+
+extension FastmailCalendarTests {
+    func testCalendarPeriodsFollowLocalDaysAndMonthBoundaries() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        let anchor = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 31, hour: 15)))
+
+        let three = CalendarDisplay.threeDays.range(containing: anchor, calendar: calendar)
+        XCTAssertEqual(CalendarDisplay.days(in: three, calendar: calendar).count, 3)
+        XCTAssertEqual(three.duration / 3600, 73, "The first Sunday in November has an extra hour")
+        XCTAssertEqual(CalendarDisplay.threeDays.page(from: anchor, direction: 1, calendar: calendar), three.end)
+
+        let month = CalendarDisplay.month.range(containing: anchor, calendar: calendar)
+        XCTAssertEqual(calendar.component(.day, from: month.start), 1)
+        XCTAssertEqual(CalendarDisplay.days(in: month, calendar: calendar).count, 31)
+        XCTAssertEqual(CalendarDisplay.month.page(from: anchor, direction: 1, calendar: calendar), month.end)
+
+        let overview = CalendarDisplay.ninetyDays.range(containing: anchor, calendar: calendar)
+        XCTAssertEqual(CalendarDisplay.days(in: overview, calendar: calendar).count, 90)
+        XCTAssertEqual(CalendarDisplay.ninetyDays.page(from: anchor, direction: 1, calendar: calendar), overview.end)
+    }
+
+    func testNinetyDayFetchUsesBoundedReportsWithoutDuplicatingSpanningEvent() async throws {
+        let server = oauthServer { _, _ in ["access_token": "C", "token_type": "bearer", "refresh_token": "R1"] }
+        let oauth = FastmailOAuth(transport: server)
+        let metadata = try await oauth.discover()
+        let tokens = OAuthTokens(accessToken: "M", refreshToken: "R0", expiresAt: .distantFuture, scope: "",
+                                 clientId: "client", issuer: metadata.issuer, calendarResource: resource)
+        let creds = OAuthCredentials(tokens: tokens, metadata: metadata, oauth: oauth, store: MemoryTokenStore(), onSignedOut: { _ in })
+        let boundaries = ["20261018T040000Z", "20261117T050000Z", "20261217T050000Z", "20270116T050000Z"]
+        let transport = MockTransport { request, index in
+            XCTAssertEqual(request.httpMethod, "REPORT")
+            let xml = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+            XCTAssertTrue(boundaries.indices.contains(index + 1))
+            guard boundaries.indices.contains(index + 1) else { return (500, [:], Data()) }
+            XCTAssertTrue(xml.contains("start=\"\(boundaries[index])\" end=\"\(boundaries[index + 1])\""))
+            let events = index < 2 ? """
+                <d:response><d:propstat><d:prop><c:calendar-data>BEGIN:VCALENDAR
+                BEGIN:VEVENT
+                UID:spans-two-reports
+                DTSTART;VALUE=DATE:20261115
+                DTEND;VALUE=DATE:20261121
+                SUMMARY:Trip
+                END:VEVENT
+                END:VCALENDAR</c:calendar-data></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+                """ : ""
+            return (207, [:], Data("""
+                <d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">\(events)</d:multistatus>
+                """.utf8))
+        }
+        let service = FastmailCalendar(credentials: creds, transport: transport)
+        let work = FastmailCalendarCollection(url: try XCTUnwrap(URL(string: "https://caldav.fastmail.com/dav/work/")),
+                                              title: "Work", canCreateEvents: true, color: nil)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 18)))
+        let end = CalendarDisplay.ninetyDays.range(containing: start, calendar: calendar).end
+        let events = try await service.events(in: work, from: start, to: end, calendar: calendar)
+        XCTAssertEqual(transport.count, 3)
+        XCTAssertEqual(events.map(\.title), ["Trip"])
+    }
+}
